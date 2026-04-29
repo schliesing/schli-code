@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""
+{{ persona.name if persona else "Agente IA" }} - Ponto de entrada principal
+Gerado automaticamente pelo Agent Creator App
+"""
+
+import os
+import sys
+
+# Carrega variáveis de ambiente do arquivo .env
+from dotenv import load_dotenv
+load_dotenv()
+
+
+def main():
+    print("=" * 60)
+    print(f"  {{ persona.name if persona else 'Agente IA' }} {{ persona.avatar_emoji if persona else '🤖' }}")
+    print("=" * 60)
+
+{% if deployment and deployment.targets %}
+    targets = {{ deployment.targets | tojson }}
+    print(f"  Modo de deploy: {', '.join(targets)}")
+{% else %}
+    targets = []
+{% endif %}
+
+    print()
+
+{% if deployment and "telegram" in deployment.targets %}
+    from telegram_bot import run_telegram_bot
+    print("Iniciando Bot do Telegram...")
+    run_telegram_bot()
+
+{% elif deployment and "discord" in deployment.targets %}
+    from discord_bot import run_discord_bot
+    print("Iniciando Bot do Discord...")
+    run_discord_bot()
+
+{% elif deployment and "rest_api" in deployment.targets %}
+    import uvicorn
+    from rest_api import app
+    print("Iniciando API REST em http://localhost:8000")
+    print("Documentação disponível em http://localhost:8000/docs")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+{% elif deployment and "web_widget" in deployment.targets %}
+    import uvicorn
+    from rest_api import app
+    print("Iniciando servidor do Web Widget em http://localhost:8000")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+{% else %}
+    # Modo interativo (terminal)
+    from agent_definition import create_agent
+    agent = create_agent()
+    print("{{ persona.greeting if persona else 'Olá! Como posso ajudar?' }}")
+    print("(Digite 'sair' para encerrar)\n")
+
+    while True:
+        try:
+            user_input = input("Você: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\nAté logo!")
+            break
+
+        if user_input.lower() in ("sair", "exit", "quit"):
+            print("Até logo!")
+            break
+
+        if not user_input:
+            continue
+
+        try:
+            result = agent.invoke({"input": user_input})
+            output = result.get("output", result)
+            print(f"\n{{ persona.name if persona else 'Agente' }}: {output}\n")
+        except Exception as e:
+            print(f"\nErro: {e}\n")
+{% endif %}
+
+
+if __name__ == "__main__":
+    main()

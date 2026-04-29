@@ -1,0 +1,71 @@
+# Dependências do {{ persona.name if persona else "Agente IA" }}
+# Gerado automaticamente pelo Agent Creator App
+
+# Framework principal
+langchain>=0.2.0
+langchain-community>=0.2.0
+
+# Modelo de IA
+{% if model and model.provider == "openai" %}
+langchain-openai>=0.1.0
+openai>=1.30.0
+{% elif model and model.provider == "anthropic" %}
+langchain-anthropic>=0.1.0
+anthropic>=0.28.0
+{% elif model and model.provider == "gemini" %}
+langchain-google-genai>=1.0.0
+google-generativeai>=0.7.0
+{% elif model and model.provider == "ollama" %}
+# Ollama usa a interface do servidor local — sem SDK extra necessário
+{% elif model and model.provider == "lmstudio" %}
+langchain-openai>=0.1.0
+openai>=1.30.0
+{% else %}
+langchain-openai>=0.1.0
+{% endif %}
+
+# Habilidades
+{% for skill in skills if skill.enabled %}
+{% if skill.id == "web_search" %}
+duckduckgo-search>=6.1.0
+{% elif skill.id == "code_execution" %}
+# PythonREPLTool está incluído no langchain-community
+{% elif skill.id == "file_read" %}
+# Ferramenta incluída no langchain-community
+{% elif skill.id == "email" %}
+# smtplib é parte da biblioteca padrão do Python
+{% elif skill.id == "calculator" %}
+# math é parte da biblioteca padrão do Python
+{% elif skill.id == "datetime" %}
+# datetime é parte da biblioteca padrão do Python
+{% elif skill.id == "memory_recall" %}
+chromadb>=0.5.0
+{% endif %}
+{% endfor %}
+
+{% if memory and memory.type == "vector_rag" %}
+# Memória vetorial
+chromadb>=0.5.0
+langchain-openai>=0.1.0  # Para embeddings
+{% endif %}
+
+# Deploy
+{% if deployment and "telegram" in deployment.targets %}
+python-telegram-bot>=21.0.0
+{% endif %}
+{% if deployment and "discord" in deployment.targets %}
+discord.py>=2.3.0
+{% endif %}
+{% if deployment and ("rest_api" in deployment.targets or "web_widget" in deployment.targets) %}
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+{% endif %}
+{% if deployment and "whatsapp" in deployment.targets %}
+twilio>=9.0.0
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+{% endif %}
+
+# Utilitários
+python-dotenv>=1.0.0
+httpx>=0.27.0

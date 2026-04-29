@@ -1,0 +1,129 @@
+"""
+{{ persona.name if persona else "Agente IA" }} - Bot do Telegram
+Gerado automaticamente pelo Agent Creator App
+"""
+
+import logging
+import os
+
+from dotenv import load_dotenv
+from telegram import Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
+
+from agent_definition import create_agent
+
+# Configuração de logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
+
+load_dotenv()
+
+# Instancia o agente (compartilhado entre conversas)
+agent = create_agent()
+
+# Armazena histórico por chat_id (para agentes sem memória persistente)
+chat_histories: dict[int, list] = {}
+
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Responde ao comando /start."""
+    greeting = "{{ persona.greeting if persona else 'Olá! Como posso ajudar?' }}"
+    await update.message.reply_text(
+        f"{greeting}\n\n"
+        "Use /ajuda para ver o que posso fazer."
+    )
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Responde ao comando /ajuda ou /help."""
+    help_text = (
+        f"*{{ persona.name if persona else 'Agente IA' }}* {{ persona.avatar_emoji if persona else '🤖' }}\n\n"
+        "Comandos disponíveis:\n"
+        "/start - Inicia a conversa\n"
+        "/ajuda - Mostra esta mensagem\n"
+        "/novo - Inicia uma nova conversa\n\n"
+        "Pode me escrever qualquer mensagem!"
+    )
+    await update.message.reply_text(help_text, parse_mode="Markdown")
+
+
+async def new_conversation_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Inicia uma nova conversa, limpando o histórico."""
+    chat_id = update.effective_chat.id
+    chat_histories.pop(chat_id, None)
+    await update.message.reply_text(
+        "Conversa reiniciada! Como posso ajudar?"
+    )
+
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Processa mensagens de texto do usuário."""
+    chat_id = update.effective_chat.id
+    user_message = update.message.text
+
+    # Indica que está digitando
+    await context.bot.send_chat_action(
+        chat_id=chat_id, action="typing"
+    )
+
+    try:
+        # Invoca o agente
+        result = agent.invoke({"input": user_message})
+        response = result.get("output", str(result))
+
+        # Limita o tamanho da mensagem (Telegram: 4096 chars)
+        if len(response) > 4000:
+            parts = [response[i:i+4000] for i in range(0, len(response), 4000)]
+            for part in parts:
+                await update.message.reply_text(part)
+        else:
+            await update.message.reply_text(response)
+
+    except Exception as e:
+        logger.error(f"Erro ao processar mensagem: {e}")
+        await update.message.reply_text(
+            "Desculpe, tive um problema ao processar sua mensagem. "
+            "Tente novamente em alguns instantes."
+        )
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Lida com erros do bot."""
+    logger.error(f"Erro no bot: {context.error}", exc_info=context.error)
+
+
+def run_telegram_bot():
+    """Inicia o bot do Telegram."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if not token:
+        raise ValueError(
+            "TELEGRAM_BOT_TOKEN não configurado. "
+            "Adicione o token no arquivo .env"
+        )
+
+    # Cria a aplicação
+    app = Application.builder().token(token).build()
+
+    # Registra os handlers
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("ajuda", help_command))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("novo", new_conversation_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_error_handler(error_handler)
+
+    logger.info("Bot do Telegram iniciado! Pressione Ctrl+C para parar.")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+if __name__ == "__main__":
+    run_telegram_bot()

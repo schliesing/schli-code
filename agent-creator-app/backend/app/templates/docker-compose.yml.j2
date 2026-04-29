@@ -1,0 +1,88 @@
+version: "3.9"
+
+# =============================================================================
+# {{ persona.name if persona else "Agente IA" }} - Docker Compose
+# Gerado automaticamente pelo Agent Creator App
+# =============================================================================
+
+services:
+  agente:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: {{ (persona.name if persona else "agente") | lower | replace(" ", "-") }}
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - agent_data:/app/data
+      - agent_logs:/app/logs
+{% if deployment and ("rest_api" in deployment.targets or "web_widget" in deployment.targets) %}
+    ports:
+      - "8000:8000"
+{% endif %}
+{% if model and model.provider == "ollama" %}
+    depends_on:
+      - ollama
+{% endif %}
+    environment:
+      - PYTHONUNBUFFERED=1
+{% if model and model.provider == "ollama" %}
+      - OLLAMA_BASE_URL=http://ollama:11434
+{% endif %}
+    healthcheck:
+{% if deployment and ("rest_api" in deployment.targets or "web_widget" in deployment.targets) %}
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+{% else %}
+      test: ["CMD", "python", "-c", "print('ok')"]
+{% endif %}
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+{% if model and model.provider == "ollama" %}
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_models:/root/.ollama
+    ports:
+      - "11434:11434"
+    # Descomente para usar GPU NVIDIA:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+{% endif %}
+
+{% if deployment and "web_widget" in deployment.targets %}
+  nginx:
+    image: nginx:alpine
+    container_name: {{ (persona.name if persona else "agente") | lower | replace(" ", "-") }}-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - agente
+{% endif %}
+
+volumes:
+  agent_data:
+    driver: local
+  agent_logs:
+    driver: local
+{% if model and model.provider == "ollama" %}
+  ollama_models:
+    driver: local
+{% endif %}
+
+networks:
+  default:
+    name: {{ (persona.name if persona else "agente") | lower | replace(" ", "-") }}-network

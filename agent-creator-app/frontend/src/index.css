@@ -1,0 +1,93 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50 text-gray-900 font-sans;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-6 py-3 rounded-xl transition-all duration-200 shadow-sm hover:shadow-md active:scale-95;
+  }
+  .btn-secondary {
+    @apply bg-white hover:bg-gray-50 text-gray-700 font-semibold px-6 py-3 rounded-xl border border-gray-200 transition-all duration-200 shadow-sm hover:shadow-md active:scale-95;
+  }
+  .card {
+    @apply bg-white rounded-xl shadow-sm border border-gray-100 p-6;
+  }
+  .card-selectable {
+    @apply bg-white rounded-xl shadow-sm border-2 border-gray-100 p-5 cursor-pointer transition-all duration-200 hover:border-indigo-300 hover:shadow-md;
+  }
+  .card-selected {
+    @apply border-indigo-500 bg-indigo-50 ring-2 ring-indigo-200;
+  }
+  .input-field {
+    @apply w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition-all bg-white;
+  }
+  .badge-beginner {
+    @apply bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5 rounded-full;
+  }
+  .badge-complexity-easy {
+    @apply bg-green-100 text-green-700 text-xs font-medium px-2 py-0.5 rounded-full;
+  }
+  .badge-complexity-medium {
+    @apply bg-yellow-100 text-yellow-700 text-xs font-medium px-2 py-0.5 rounded-full;
+  }
+  .badge-complexity-hard {
+    @apply bg-red-100 text-red-700 text-xs font-medium px-2 py-0.5 rounded-full;
+  }
+}
+
+/* Typing indicator animation */
+.typing-dot {
+  animation: typingBounce 1.4s infinite ease-in-out;
+}
+.typing-dot:nth-child(1) { animation-delay: 0s; }
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes typingBounce {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-8px); }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* Markdown in chat */
+.chat-markdown code {
+  @apply bg-gray-100 text-gray-800 px-1 py-0.5 rounded text-sm font-mono;
+}
+.chat-markdown pre {
+  @apply bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto my-2 text-sm;
+}
+.chat-markdown pre code {
+  @apply bg-transparent text-gray-100 p-0;
+}
+.chat-markdown strong {
+  @apply font-semibold;
+}
+.chat-markdown em {
+  @apply italic;
+}
+.chat-markdown ul {
+  @apply list-disc list-inside space-y-1 my-1;
+}
+.chat-markdown ol {
+  @apply list-decimal list-inside space-y-1 my-1;
+}

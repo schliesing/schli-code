@@ -7,10 +7,18 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from langchain.agents import AgentExecutor, create_react_agent
-from langchain.memory import ConversationBufferMemory, ConversationSummaryMemory
-from langchain.prompts import PromptTemplate
-from langchain.tools import Tool
+try:
+    # langchain >= 1.0 reorganized classic components
+    from langchain_classic.agents import AgentExecutor, create_react_agent
+    from langchain_classic.memory import ConversationBufferMemory, ConversationSummaryMemory
+    from langchain_classic.prompts import PromptTemplate
+    from langchain_classic.tools import Tool
+except ImportError:
+    # Fallback for langchain 0.2.x
+    from langchain.agents import AgentExecutor, create_react_agent  # type: ignore[no-redef]
+    from langchain.memory import ConversationBufferMemory, ConversationSummaryMemory  # type: ignore[no-redef]
+    from langchain.prompts import PromptTemplate  # type: ignore[no-redef]
+    from langchain.tools import Tool  # type: ignore[no-redef]
 from langchain_core.language_models import BaseChatModel
 
 from app.schemas.agent import AgentConfigSchema, ModelConfig, MemoryConfig
@@ -363,7 +371,10 @@ def _build_memory(memory_cfg: MemoryConfig | None, llm: BaseChatModel) -> Any:
         # Try to use ChromaDB for vector memory
         try:
             from langchain_community.vectorstores import Chroma
-            from langchain.memory import VectorStoreRetrieverMemory
+            try:
+                from langchain_classic.memory import VectorStoreRetrieverMemory
+            except ImportError:
+                from langchain.memory import VectorStoreRetrieverMemory  # type: ignore
 
             # Use a simple in-memory chroma for now
             # In production this would be configured with a persistent path
@@ -524,8 +535,12 @@ class AgentBuilder:
         Builds a simple LLM chain without tools (fallback when no skills are configured).
         Returns a runnable chain.
         """
-        from langchain.chains import ConversationChain
-        from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+        try:
+            from langchain_classic.chains import ConversationChain
+            from langchain_classic.prompts import ChatPromptTemplate, MessagesPlaceholder
+        except ImportError:
+            from langchain.chains import ConversationChain  # type: ignore
+            from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder  # type: ignore
 
         if not config.model:
             raise ValueError("Configuração de modelo não definida.")

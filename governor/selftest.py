@@ -323,8 +323,10 @@ def _run_all(tmp, failures):
     # do heartbeat always-on) — sem isso o Governante acha que toda esteira parou.
     hb_fresh = os.path.join(project_dir, "hb-fresh.txt")
     open(hb_fresh, "w").close()  # recém-criado = fresco
+    # expected_always_on=false (cron, não serviço) NÃO pode desligar o heartbeat
     hb_charter = dict(confirmed, heartbeats=[{"path": hb_fresh, "max_age_h": 26}],
-                      ports=[], endpoints=[])
+                      ports=[], endpoints=[],
+                      rules={**(confirmed.get("rules") or {}), "expected_always_on": False})
     hb_results = monitor.project_checks(cfg, hb_charter, {})
     hb = [r for r in hb_results if r.check.startswith("heartbeat:")]
     _check(failures, bool(hb) and hb[0].ok,

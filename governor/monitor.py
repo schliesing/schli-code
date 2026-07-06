@@ -174,8 +174,13 @@ def project_checks(cfg, charter, state):
     results = []
     pid = charter["id"]
     rules = charter.get("rules") or {}
+    # Heartbeats/backups declarados valem SEMPRE — é o mecanismo de vigilância de
+    # pipeline NÃO-always-on (cron de esteira de vídeo, postagem de Instagram):
+    # sem isso, um projeto com expected_always_on=false ficava sem NENHUMA checagem
+    # e o Governante nunca perceberia que a esteira parou de rodar.
+    results.extend(_check_declared_freshness(pid, charter))
     if not rules.get("expected_always_on", True):
-        return results
+        return [r for r in results if r]
 
     for unit in charter.get("services") or []:
         results.append(_check_systemd(pid, unit))
@@ -198,7 +203,6 @@ def project_checks(cfg, charter, state):
     drift = _check_git(pid, charter)
     if drift:
         results.append(drift)
-    results.extend(_check_declared_freshness(pid, charter))
     return [r for r in results if r]
 
 

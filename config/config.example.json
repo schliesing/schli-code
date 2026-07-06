@@ -1,0 +1,67 @@
+{
+  "digest_hour": 8,
+  "dry_run": false,
+  "exclude_dirs": [
+    "node_modules",
+    ".git",
+    "venv",
+    ".venv",
+    "env",
+    "__pycache__",
+    ".cache",
+    ".npm",
+    ".local",
+    "snap",
+    ".cargo",
+    ".rustup",
+    "site-packages",
+    "dist-packages",
+    ".Trash",
+    "lost+found"
+  ],
+  "healing_enabled": true,
+  "http_timeout": 6,
+  "intervals": {
+    "discovery": 600,
+    "flush_queue": 120,
+    "health": 60,
+    "hygiene": 86400,
+    "learning": 300,
+    "selfcare": 60,
+    "updates": 43200
+  },
+  "journal": {
+    "retention_months": 6
+  },
+  "max_scan_depth": 3,
+  "quarantine": {
+    "retention_days": 14
+  },
+  "scan_roots": [
+    "/opt",
+    "/srv",
+    "/var/www",
+    "/home",
+    "/root"
+  ],
+  "telegram": {
+    "allowed_chat_ids": [],
+    "chat_id": "COLOQUE_O_CHAT_ID",
+    "token": "COLOQUE_O_TOKEN_DO_BOT_ORION"
+  },
+  "thresholds": {
+    "big_file_mb": 100,
+    "cert_warn_days": 14,
+    "disk_critical_pct": 95,
+    "disk_pct": 85,
+    "dup_min_mb": 1,
+    "fails_before_incident": 2,
+    "load_per_core": 2.0,
+    "log_size_mb": 200,
+    "max_heals_per_hour": 3,
+    "mem_growth_pct_per_hour": 10,
+    "mem_pct": 90,
+    "self_mem_limit_mb": 300
+  },
+  "weekly_digest_day": 0
+}

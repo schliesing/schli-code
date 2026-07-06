@@ -1,0 +1,30 @@
+[Unit]
+Description=Governor — agente governante do VPS
+Documentation=https://github.com/schliesing/schli-code
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/python3 -m governor start
+WorkingDirectory=/opt/governor
+Environment=GOVERNOR_HOME=/var/lib/governor
+Environment=GOVERNOR_CONFIG=/etc/governor/config.json
+Environment=PYTHONUNBUFFERED=1
+
+# Self-healing do próprio Governor:
+# - Restart=always: se morrer (crash, exit por memória alta), volta em 5s
+# - WatchdogSec: se o loop travar por 3min sem sd_notify, o systemd o mata e reinicia
+Restart=always
+RestartSec=5
+WatchdogSec=180
+StartLimitIntervalSec=600
+StartLimitBurst=20
+
+# Higiene de recursos do próprio agente
+MemoryMax=512M
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

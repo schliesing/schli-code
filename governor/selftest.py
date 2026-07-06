@@ -215,6 +215,36 @@ def _run_all(tmp, failures):
     daemon.task_learning()
     _check(failures, True, "task_learning roda sem exceção")
 
+    # --- 24/7: watchdog condicionado ao progresso + tarefas de fundo ------------------
+    import time as _time
+    _check(failures, daemon._loop_alive(), "watchdog: loop fresco alimenta")
+    daemon._last_tick = _time.time() - 10 * 3600
+    _check(failures, not daemon._loop_alive(),
+           "watchdog: loop travado deixa de alimentar (systemd reinicia)")
+    daemon._last_tick = _time.time()
+    ran = []
+    import threading as _threading
+    gate = _threading.Event()
+
+    def slow_task():
+        ran.append(1)
+        gate.wait(5)
+
+    daemon._run_due_bg("teste-bg", 0, slow_task, first_run_now=True)
+    _time.sleep(0.1)
+    daemon._run_due_bg("teste-bg", 0, slow_task, first_run_now=True)
+    _time.sleep(0.1)
+    _check(failures, len(ran) == 1,
+           "tarefa de fundo não roda em duplicata enquanto a anterior vive")
+    _check(failures, daemon._bg_threads["teste-bg"].is_alive(),
+           "tarefa lenta roda em thread de fundo (loop principal livre)")
+    gate.set()
+    daemon._bg_threads["teste-bg"].join(5)
+    daemon._run_due_bg("teste-bg", 0, slow_task, first_run_now=True)
+    gate.set()
+    _time.sleep(0.1)
+    _check(failures, len(ran) == 2, "tarefa de fundo reexecuta após terminar")
+
     # --- bulkhead ----------------------------------------------------------------------------
     from .selfcare import Bulkhead
     bh = Bulkhead(journal)

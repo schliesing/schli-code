@@ -59,6 +59,9 @@ DEFAULTS = {
     "dry_run": False,          # true = registra o que faria, não executa ações
     "healing_enabled": True,
     "http_timeout": 6,
+    # Se o loop principal ficar sem progredir por este tempo (s), o Governor
+    # para de alimentar o watchdog do systemd, que o mata e reinicia.
+    "watchdog_stall_limit": 600,
 }
 
 _ENV_HOME = "GOVERNOR_HOME"

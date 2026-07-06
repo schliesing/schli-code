@@ -63,6 +63,5 @@
     "mem_pct": 90,
     "self_mem_limit_mb": 300
   },
-  "watchdog_stall_limit": 600,
   "weekly_digest_day": 0
 }

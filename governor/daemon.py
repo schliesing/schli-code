@@ -10,10 +10,21 @@ Agenda (intervalos na config):
   digests    : resumo diário e relatório semanal
 
 Cada tarefa roda dentro de um Bulkhead: se uma quebrar, as outras seguem.
+
+Desenho 24/7 ("nunca ficar travado"):
+  - Tarefas LENTAS (discovery, hygiene, updates) rodam em threads de fundo;
+    o loop principal (health/healing) nunca espera por elas.
+  - O watchdog do systemd é alimentado por uma thread própria, mas SÓ
+    enquanto o loop principal progride (watchdog_stall_limit). Loop travado
+    -> pings param -> systemd mata e reinicia o processo (Restart=always).
+  - Thread de fundo presa demais gera alerta e, persistindo, reinício limpo
+    do processo inteiro — threads não são "matáveis" em Python; o processo é.
 """
 
 import datetime
 import signal
+import sys
+import threading
 import time
 
 from . import charter as charter_mod
@@ -41,6 +52,10 @@ class Daemon:
         self.weekly_cache = {"hygiene_notes": [], "updates": []}
         self._stop = False
         self._last_run = {}
+        self._last_tick = time.time()
+        self._bg_threads = {}    # nome -> Thread de tarefa lenta
+        self._bg_started = {}    # nome -> epoch de início
+        self._bg_warned = set()
         self._register_commands()
 
     # --- flags (pausa) ---------------------------------------------------------
@@ -63,21 +78,15 @@ class Daemon:
         signal.signal(signal.SIGTERM, self._on_sigterm)
         signal.signal(signal.SIGINT, self._on_sigterm)
         self.orion.start_polling()
+        self._start_watchdog_thread()
         notify_ready()
         self.orion.send("🏛 Governor de pé e observando o servidor. "
                         "Use /ajuda para os comandos.", silent=True)
-        # primeira descoberta imediata
-        self.bulkhead.run("discovery", self.task_discovery)
         while not self._stop:
-            notify_watchdog()
+            self._last_tick = time.time()
+            # rápidas: rodam no loop principal
             self._run_due("health", self.cfg.interval("health"),
                           self.task_health)
-            self._run_due("discovery", self.cfg.interval("discovery"),
-                          self.task_discovery)
-            self._run_due("hygiene", self.cfg.interval("hygiene"),
-                          self.task_hygiene)
-            self._run_due("updates", self.cfg.interval("updates"),
-                          self.task_updates)
             self._run_due("learning", self.cfg.interval("learning"),
                           self.task_learning)
             self._run_due("selfcare", self.cfg.interval("selfcare"),
@@ -86,6 +95,13 @@ class Daemon:
                           self.orion.flush_queue)
             self._run_due("forecast", 3600, self.task_forecast)
             self._run_due("digests", 300, self.task_digests)
+            # lentas: threads de fundo, nunca bloqueiam o health
+            self._run_due_bg("discovery", self.cfg.interval("discovery"),
+                             self.task_discovery, first_run_now=True)
+            self._run_due_bg("hygiene", self.cfg.interval("hygiene"),
+                             self.task_hygiene)
+            self._run_due_bg("updates", self.cfg.interval("updates"),
+                             self.task_updates)
             time.sleep(5)
         self.orion.send("🏛 Governor encerrando (sinal recebido). Até já.",
                         silent=True)
@@ -100,6 +116,55 @@ class Daemon:
             return
         self._last_run[name] = now
         self.bulkhead.run(name, fn)
+
+    def _run_due_bg(self, name, interval, fn, first_run_now=False):
+        """Agenda tarefa lenta numa thread de fundo. Nunca roda duas
+        instâncias da mesma tarefa ao mesmo tempo."""
+        now = time.time()
+        if name not in self._last_run and not first_run_now:
+            self._last_run[name] = now  # primeira execução só após 1 intervalo
+            return
+        if now - self._last_run.get(name, 0) < interval and \
+                name in self._last_run:
+            return
+        previous = self._bg_threads.get(name)
+        if previous and previous.is_alive():
+            return  # ainda rodando; tenta de novo no próximo tick
+        self._last_run[name] = now
+        self._bg_started[name] = now
+        self._bg_warned.discard(name)
+        thread = threading.Thread(
+            target=lambda: self.bulkhead.run(name, fn),
+            name="gov-" + name, daemon=True)
+        self._bg_threads[name] = thread
+        thread.start()
+
+    # --- watchdog gated pelo progresso do loop -----------------------------------
+    def _loop_alive(self):
+        limit = self.cfg.get("watchdog_stall_limit", default=600)
+        return (time.time() - self._last_tick) < limit
+
+    def _watchdog_loop(self):
+        starving = False
+        while not self._stop:
+            if self._loop_alive():
+                notify_watchdog()
+                starving = False
+            elif not starving:
+                starving = True
+                try:
+                    self.journal.log(
+                        "selfcare", "loop principal sem progresso além do "
+                        "limite; parei de alimentar o watchdog para o "
+                        "systemd me reiniciar")
+                except Exception:
+                    pass
+            time.sleep(30)
+
+    def _start_watchdog_thread(self):
+        thread = threading.Thread(target=self._watchdog_loop,
+                                  name="gov-watchdog", daemon=True)
+        thread.start()
 
     # --- tarefas -------------------------------------------------------------------
     def task_health(self):
@@ -283,9 +348,34 @@ class Daemon:
                 or any(r.get("project") == pid for r in recent)
             self.learning.maybe_snapshot_baseline(c, had_incident)
 
+    BG_WARN_AFTER = 2 * 3600      # thread de fundo presa: avisa
+    BG_RESTART_AFTER = 6 * 3600   # persistindo: reinicia o processo inteiro
+
     def task_selfcare(self):
         check_self_memory(self.cfg, self.journal, self.orion)
         verify_state(self.cfg, self.journal)
+        for name, thread in list(self._bg_threads.items()):
+            if not thread.is_alive():
+                continue
+            age = time.time() - self._bg_started.get(name, time.time())
+            if age > self.BG_RESTART_AFTER:
+                self.journal.log("selfcare", "tarefa '%s' presa há %.1fh; "
+                                 "reiniciando o processo para me libertar"
+                                 % (name, age / 3600))
+                self.orion.send("🩺 Governor: minha tarefa '%s' está presa há "
+                                "%.1fh (provável comando/FS pendurado). Vou "
+                                "reiniciar a mim mesmo; o systemd me traz de "
+                                "volta em 5s." % (name, age / 3600))
+                sys.exit(1)
+            if age > self.BG_WARN_AFTER and name not in self._bg_warned:
+                self._bg_warned.add(name)
+                self.journal.log("selfcare", "tarefa '%s' rodando há %.1fh — "
+                                 "possível travamento" % (name, age / 3600))
+                self.orion.send("🩺 Governor: minha tarefa '%s' roda há %.1fh "
+                                "sem terminar. Se passar de %dh, reinicio a "
+                                "mim mesmo por segurança."
+                                % (name, age / 3600,
+                                   self.BG_RESTART_AFTER // 3600), silent=True)
 
     def task_forecast(self):
         result = monitor.disk_forecast(self.cfg)

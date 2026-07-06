@@ -59,6 +59,33 @@ Acompanhe com `journalctl -u governor -f` e, no Telegram, `/status`.
 - Auto-update do próprio Governor só é adotado se o **selftest** da versão
   nova passar; senão faz rollback automático e avisa.
 
+## 🔁 Rodando 24/7 sem travar
+
+O Governor roda como serviço **systemd** — de propósito, não pm2: o systemd
+é o init do Linux (sempre vivo, sobe no boot) e não depende de Node; o pm2 é
+uma das coisas que o Governor vigia, e o vigia não pode depender do vigiado.
+
+Camadas de resiliência, da mais externa para a mais interna:
+
+1. **`Restart=always` + `StartLimitIntervalSec=0`** — morreu, volta em 5s,
+   para sempre (o systemd nunca desiste dele). Reboot do VPS? `systemctl
+   enable` o traz de volta sozinho.
+2. **Watchdog condicionado a progresso** — o Governor alimenta o watchdog do
+   systemd (`WatchdogSec=180`) por uma thread própria, mas **só enquanto o
+   loop principal progride** (`watchdog_stall_limit`, 10 min). Loop
+   travado → pings param → systemd mata e reinicia.
+3. **Tarefas lentas em threads de fundo** — discovery, higiene e updates
+   nunca bloqueiam as checagens de saúde. Tarefa de fundo presa >2h gera
+   alerta; >6h, o Governor reinicia a si mesmo (e avisa no Orion).
+4. **Autolimite de memória** — RSS acima de `self_mem_limit_mb` (300 MB) →
+   reinício limpo preventivo (`MemoryMax=512M` na unit como teto duro).
+5. **Bulkheads** — exceção em qualquer subsistema não derruba o daemon;
+   o subsistema entra em backoff e o erro vai para o self-journal.
+
+Se preferir pm2 mesmo assim: `pm2 start "governorctl start" --name governor
+&& pm2 save` funciona (o watchdog vira no-op), mas as camadas 1–2 se perdem
+— recomendo systemd.
+
 ## Comandos
 
 **Telegram (Orion):** `/status` `/projetos` `/missao <id>` `/confirmar <id>`

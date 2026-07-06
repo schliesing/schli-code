@@ -1,9 +1,18 @@
-"""Cliente do bot Telegram Orion — canal de informações dos projetos.
+"""Cliente do bot Telegram do Governor (bot PRÓPRIO — ex.: @governante0001_bot).
+
+⚠️ NUNCA reutilize o token de outro bot que já faça getUpdates (ex.: o Orion
+do VPS): o Telegram só permite UM consumidor de getUpdates por token — dois
+processos no mesmo token entram em guerra de 409 e ambos param de receber.
 
 - Envio com fila offline: se o Telegram estiver inacessível, a mensagem é
   gravada em disco e reenviada quando a conexão voltar (nada se perde).
 - Long-polling de comandos (/status, /aprovar, /confirmar, ...) restrito
   aos chats autorizados.
+- Botões inline: send(..., buttons=[[("rótulo", "dado"), ...]]) e handlers
+  de callback por prefixo (register_callback) — toda pergunta de modificação
+  de sistema vai com botões, não com "digite /comando".
+- Conversa livre: mensagem que NÃO começa com "/" vai para o chat_handler
+  (o Governor responde em linguagem natural sobre o estado do VPS).
 - Sem dependências: usa urllib da stdlib.
 """
 
@@ -34,6 +43,8 @@ class Orion:
         self.queue_path = cfg.state_file("telegram-queue.jsonl")
         self.offset_path = cfg.state_file("telegram-offset.json")
         self.handlers = {}      # comando -> fn(args, chat_id) -> resposta str
+        self.callback_handlers = {}  # prefixo -> fn(data, chat_id) -> resposta
+        self.chat_handler = None     # fn(texto, chat_id) -> resposta (conversa livre)
         self._stop = threading.Event()
         self._thread = None
 
@@ -50,8 +61,12 @@ class Orion:
             return json.loads(resp.read().decode())
 
     # --- envio ---------------------------------------------------------------
-    def send(self, text, chat_id=None, silent=False):
-        """Envia mensagem; em falha, enfileira em disco para reenvio."""
+    def send(self, text, chat_id=None, silent=False, buttons=None):
+        """Envia mensagem; em falha, enfileira em disco para reenvio.
+
+        buttons: lista de LINHAS de botões inline; cada botão é (rótulo, dado)
+        — o dado volta no callback_query e é roteado por register_callback.
+        """
         chat = str(chat_id or self.chat_id)
         if not self.token or not chat:
             # Sem Telegram configurado: registra no journal para não perder.
@@ -59,25 +74,38 @@ class Orion:
                              data={"text": text[:500]})
             return False
         ok = True
-        for chunk in _split(text):
-            if not self._send_once(chunk, chat, silent):
-                self._enqueue(chunk, chat)
+        chunks = _split(text)
+        for i, chunk in enumerate(chunks):
+            # botões só no último pedaço (a pergunta fica junto da resposta)
+            btns = buttons if i == len(chunks) - 1 else None
+            if not self._send_once(chunk, chat, silent, btns):
+                self._enqueue(chunk, chat, btns)
                 ok = False
         return ok
 
-    def _send_once(self, text, chat, silent):
+    def _send_once(self, text, chat, silent, buttons=None):
+        params = {
+            "chat_id": chat,
+            "text": text,
+            "disable_notification": "true" if silent else "false",
+        }
+        if buttons:
+            params["reply_markup"] = json.dumps({"inline_keyboard": [
+                [{"text": label, "callback_data": data[:64]}
+                 for (label, data) in row]
+                for row in buttons
+            ]})
         try:
-            result = self._call("sendMessage", {
-                "chat_id": chat,
-                "text": text,
-                "disable_notification": "true" if silent else "false",
-            })
+            result = self._call("sendMessage", params)
             return bool(result.get("ok"))
         except (urllib.error.URLError, OSError, ValueError, TimeoutError):
             return False
 
-    def _enqueue(self, text, chat):
-        append_jsonl(self.queue_path, {"ts": time.time(), "chat": chat, "text": text})
+    def _enqueue(self, text, chat, buttons=None):
+        item = {"ts": time.time(), "chat": chat, "text": text}
+        if buttons:
+            item["buttons"] = [[list(b) for b in row] for row in buttons]
+        append_jsonl(self.queue_path, item)
 
     def flush_queue(self):
         """Reenvia mensagens represadas (chamado periodicamente pelo daemon)."""
@@ -87,7 +115,8 @@ class Orion:
         sent = 0
         remaining = []
         for item in pending:
-            if sent < 20 and self._send_once(item["text"], item["chat"], True):
+            btns = [[tuple(b) for b in row] for row in item.get("buttons") or []] or None
+            if sent < 20 and self._send_once(item["text"], item["chat"], True, btns):
                 sent += 1
             else:
                 remaining.append(item)
@@ -105,6 +134,11 @@ class Orion:
     def register(self, command, handler):
         """Registra handler para um comando (sem a barra)."""
         self.handlers[command.lstrip("/").lower()] = handler
+
+    def register_callback(self, prefix, handler):
+        """Registra handler para callback_data que começa com 'prefixo:'.
+        handler(data, chat_id) -> resposta opcional (str)."""
+        self.callback_handlers[prefix.lower()] = handler
 
     def poll_loop(self):
         """Long-polling do getUpdates; roda em thread própria."""
@@ -130,6 +164,12 @@ class Orion:
             return
         for update in result.get("result", []):
             state["offset"] = max(state["offset"], update["update_id"])
+            # 1) botão inline clicado
+            callback = update.get("callback_query")
+            if callback:
+                self._handle_callback(callback)
+                continue
+            # 2) mensagem de texto
             message = update.get("message") or update.get("edited_message") or {}
             text = (message.get("text") or "").strip()
             chat = str((message.get("chat") or {}).get("id", ""))
@@ -141,7 +181,52 @@ class Orion:
                 continue
             if text.startswith("/"):
                 self._dispatch(text, chat)
+            elif self.chat_handler:
+                self._dispatch_chat(text, chat)
         atomic_write_json(self.offset_path, state)
+
+    def _handle_callback(self, callback):
+        """Botão inline: valida o chat, confirma o clique (answerCallbackQuery)
+        e roteia pelo prefixo do callback_data ('prefixo:resto')."""
+        data = str(callback.get("data") or "")
+        chat = str(((callback.get("message") or {}).get("chat") or {})
+                   .get("id", "") or (callback.get("from") or {}).get("id", ""))
+        try:  # tira o "relógio" do botão; best-effort
+            self._call("answerCallbackQuery", {"callback_query_id": callback.get("id", "")})
+        except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+            pass
+        if not data or chat not in self.allowed:
+            self.journal.log("telegram", "callback de chat nao autorizado",
+                             data={"chat": chat, "data": data[:80]})
+            return
+        prefix = data.split(":", 1)[0].lower()
+        handler = self.callback_handlers.get(prefix)
+        if not handler:
+            self.send("Botão sem dono (prefixo '%s') — versão antiga?" % prefix,
+                      chat_id=chat)
+            return
+        self.journal.log("telegram", "callback recebido",
+                         data={"data": data[:120], "chat": chat})
+        try:
+            reply = handler(data, chat)
+        except Exception as exc:  # nunca derruba a thread de polling
+            self.journal.self_error("telegram.callback.%s" % prefix, exc)
+            reply = "⚠️ Erro ao processar o botão — registrado no meu journal."
+        if reply:
+            self.send(reply, chat_id=chat)
+
+    def _dispatch_chat(self, text, chat):
+        """Mensagem livre (sem '/') → conversa em linguagem natural."""
+        self.journal.log("telegram", "conversa recebida",
+                         data={"chat": chat, "text": text[:200]})
+        try:
+            reply = self.chat_handler(text, chat)
+        except Exception as exc:  # noqa: BLE001 — conversa nunca derruba o polling
+            self.journal.self_error("telegram.chat", exc)
+            reply = ("⚠️ Tropecei ao pensar na resposta (erro registrado). "
+                     "Tenta /status ou /ajuda enquanto me recupero.")
+        if reply:
+            self.send(reply, chat_id=chat)
 
     def _dispatch(self, text, chat):
         parts = text.split()

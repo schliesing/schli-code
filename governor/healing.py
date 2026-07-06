@@ -28,9 +28,10 @@ DEFAULT_ACTIONS = {
     ],
     "docker": [
         {"name": "docker-restart", "cmd": ["docker", "restart", "{container}"]},
+        # sem `cd {path}` interpolado: o _run_action já executa com cwd=path
+        # (path com espaço/metacaractere quebrava — e era vetor de injeção).
         {"name": "compose-up",
-         "cmd": ["bash", "-c",
-                 "cd {path} && (docker compose up -d || docker-compose up -d)"],
+         "cmd": ["bash", "-c", "docker compose up -d || docker-compose up -d"],
          "needs_path": True},
     ],
     "pm2": [
@@ -41,9 +42,13 @@ DEFAULT_ACTIONS = {
     "disk": [
         {"name": "vacuum-journald",
          "cmd": ["journalctl", "--vacuum-size=200M"], "system": True},
+        # PRUNE NUNCA É AUTOMÁTICO (decisão do Rafa, 2026-07-06): remove
+        # containers parados e imagens irreversivelmente — neste VPS há
+        # containers parados DE PROPÓSITO (reversíveis). "approval": True faz
+        # o daemon PERGUNTAR no Telegram com botões ✅/❌ em vez de executar.
         {"name": "docker-prune",
          "cmd": ["docker", "system", "prune", "-f"], "system": True,
-         "requires": "docker"},
+         "requires": "docker", "approval": True},
         {"name": "apt-clean", "cmd": ["apt-get", "clean"], "system": True,
          "requires": "apt-get"},
     ],
@@ -125,6 +130,14 @@ class Healer:
                 outcome["log"].append("ação %s em quarentena (falhou demais)"
                                       % action["name"])
                 continue
+            # Ação sensível: NÃO executa — devolve pro daemon perguntar ao
+            # operador (botões no Telegram). As demais ações da lista seguem.
+            if action.get("approval") and not context.get("_approved"):
+                outcome.setdefault("needs_approval", []).append(action)
+                outcome["log"].append(
+                    "ação %s requer aprovação do operador — perguntei no "
+                    "Telegram" % action["name"])
+                continue
             outcome["attempts"] += 1
             self._record_attempt(result.key())
             ok = self._run_action(action, context, outcome)
@@ -143,6 +156,17 @@ class Healer:
                 return outcome
         outcome["escalate"] = True
         return outcome
+
+    def run_approved(self, action, context):
+        """Executa uma ação que o operador APROVOU pelo botão do Telegram.
+
+        Devolve (ok, log_lines). O gate de 'approval' é pulado de propósito —
+        a aprovação humana é a autorização."""
+        ctx = dict(context)
+        ctx["_approved"] = True
+        outcome = {"log": []}
+        ok = self._run_action(action, ctx, outcome)
+        return ok, outcome["log"]
 
     def _run_action(self, action, context, outcome):
         if action.get("special") == "restart_project":

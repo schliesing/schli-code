@@ -234,15 +234,34 @@ def _check_container(pid, name):
     return CheckResult(pid, "docker:%s" % name, False, detail, severity=SEV_CRIT)
 
 
+# Cache do `pm2 jlist` por janela curta: este VPS tem dezenas de apps pm2 e a
+# checagem roda por PROCESSO a cada tick de health — sem cache seriam dezenas
+# de execuções do pm2 a cada 60s (CPU à toa numa máquina com histórico de
+# afogamento). TTL de 30s mantém o dado fresco dentro do mesmo tick.
+_PM2_CACHE = {"ts": 0.0, "apps": None}
+
+
+def _pm2_apps(ttl=30):
+    now = time.time()
+    if _PM2_CACHE["apps"] is not None and now - _PM2_CACHE["ts"] < ttl:
+        return _PM2_CACHE["apps"]
+    rc, out, _ = run_cmd(["pm2", "jlist"], timeout=20)
+    apps = None
+    if rc == 0:
+        try:
+            apps = json.loads(out[out.index("["):])
+        except (ValueError, json.JSONDecodeError):
+            apps = None
+    _PM2_CACHE["ts"] = now
+    _PM2_CACHE["apps"] = apps
+    return apps
+
+
 def _check_pm2(pid, name):
     if not which("pm2"):
         return None
-    rc, out, _ = run_cmd(["pm2", "jlist"], timeout=20)
-    if rc != 0:
-        return None
-    try:
-        apps = json.loads(out[out.index("["):])
-    except (ValueError, json.JSONDecodeError):
+    apps = _pm2_apps()
+    if apps is None:
         return None
     for app in apps:
         if app.get("name") == name:

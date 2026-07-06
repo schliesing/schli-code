@@ -199,26 +199,93 @@ def sync_with_catalog(cfg, journal, catalog):
         if charter.get("observed") != observed:
             charter["observed"] = observed
             save_charter(cfg, charter)
-        # .governor.json declarado sempre re-sincroniza campos declarativos
+        # .governor.json declarado re-sincroniza campos declarativos — MAS em
+        # charter CONFIRMADO os campos SENSÍVEIS (update_cmd/test_cmd/rules,
+        # que viram execução como root ou soltam a rédea do healing) NUNCA
+        # entram direto: qualquer conta com escrita no diretório do projeto
+        # poderia escalar privilégio por esse caminho. Eles ficam em
+        # 'pending_declared' e o daemon PERGUNTA no Telegram (botões ✅/❌).
         declared = info.get("declared")
         if isinstance(declared, dict):
             changed = False
-            for field in ("mission", "endpoints", "log_paths", "domains",
-                          "update_cmd", "test_cmd", "backup_paths"):
+            confirmado = charter.get("status") == STATUS_CONFIRMED
+            campos_livres = ["mission", "endpoints", "log_paths", "domains",
+                             "backup_paths"]
+            campos_sensiveis = ["update_cmd", "test_cmd"]
+            if not confirmado:
+                campos_livres = campos_livres + campos_sensiveis
+            for field in campos_livres:
                 if declared.get(field) and charter.get(field) != declared[field]:
                     charter[field] = declared[field]
                     changed = True
-            if declared.get("rules"):
+            if declared.get("rules") and not confirmado:
                 merged = dict(charter.get("rules") or {})
                 merged.update(declared["rules"])
                 if merged != charter.get("rules"):
                     charter["rules"] = merged
+                    changed = True
+            if confirmado:
+                pend = {}
+                for field in campos_sensiveis:
+                    if declared.get(field) and charter.get(field) != declared[field]:
+                        pend[field] = declared[field]
+                if declared.get("rules"):
+                    merged = dict(charter.get("rules") or {})
+                    merged.update(declared["rules"])
+                    if merged != charter.get("rules"):
+                        pend["rules"] = declared["rules"]
+                # anti-loop: proposta idêntica à última RECUSADA não re-pergunta
+                # (só volta a perguntar se o .governor.json mudar de novo)
+                if pend and pend != charter.get("declared_rejected_last") and \
+                        charter.get("pending_declared") != pend:
+                    charter["pending_declared"] = pend
+                    changed = True
+                    journal.log("charter", "mudança SENSÍVEL no .governor.json "
+                                "aguarda aprovação do operador", project=pid,
+                                data={"campos": sorted(pend)})
+                elif not pend and charter.get("pending_declared"):
+                    charter.pop("pending_declared", None)
                     changed = True
             if changed:
                 save_charter(cfg, charter)
                 journal.log("charter", "atualizado a partir de .governor.json",
                             project=pid)
     return new_drafts
+
+
+def apply_pending_declared(cfg, journal, project_id):
+    """Operador APROVOU (botão): aplica as mudanças sensíveis pendentes."""
+    charter = load_charter(cfg, project_id)
+    if not charter or not charter.get("pending_declared"):
+        return None
+    pend = charter.pop("pending_declared")
+    for field, value in pend.items():
+        if field == "rules":
+            merged = dict(charter.get("rules") or {})
+            merged.update(value)
+            charter["rules"] = merged
+        else:
+            charter[field] = value
+    save_charter(cfg, charter)
+    journal.log("charter", "mudanças sensíveis do .governor.json APROVADAS "
+                "e aplicadas", project=project_id, data={"campos": sorted(pend)})
+    return charter
+
+
+def discard_pending_declared(cfg, journal, project_id):
+    """Operador RECUSOU (botão): descarta as mudanças sensíveis pendentes."""
+    charter = load_charter(cfg, project_id)
+    if not charter or not charter.get("pending_declared"):
+        return None
+    pend = charter.pop("pending_declared")
+    charter["declared_rejected_last"] = pend  # anti-loop no próximo sync
+    charter.setdefault("declared_rejected", []).append(
+        {"ts": now_iso(), "campos": sorted(pend)})
+    charter["declared_rejected"] = charter["declared_rejected"][-10:]
+    save_charter(cfg, charter)
+    journal.log("charter", "mudanças sensíveis do .governor.json RECUSADAS",
+                project=project_id, data={"campos": sorted(pend)})
+    return charter
 
 
 def confirm(cfg, journal, project_id):

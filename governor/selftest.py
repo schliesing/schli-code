@@ -258,3 +258,84 @@ def _run_all(tmp, failures):
            "bulkhead suspende subsistema em backoff")
     _check(failures, len(journal.self_errors_recent()) >= 1,
            "erro próprio registrado no self-journal")
+
+    # --- botões inline, aprovações e conversa (2026-07-06) -----------------------------------
+    # callback inline roteia pelo prefixo (sem rede: _call simulado)
+    hits = []
+    orion.allowed.add("1")
+    orion._call = lambda *a, **k: {"ok": True}
+    orion.register_callback("tst", lambda data, chat: hits.append(data) and None)
+    orion._handle_callback({"id": "x", "data": "tst:abc",
+                            "message": {"chat": {"id": 1}}})
+    _check(failures, hits == ["tst:abc"], "callback inline roteia pelo prefixo")
+
+    # docker-prune NUNCA automático: exige aprovação e o heal devolve a pendência
+    from .healing import DEFAULT_ACTIONS
+    prune = [a for a in DEFAULT_ACTIONS["disk"] if a["name"] == "docker-prune"]
+    _check(failures, bool(prune) and prune[0].get("approval") is True,
+           "docker-prune marcado como 'requer aprovação'")
+    disk_fail = monitor.CheckResult("_system", "disk:/", False, "disco 99%",
+                                    severity=monitor.SEV_CRIT)
+    out_disk = healer_dry.heal(None, disk_fail, lambda: None)
+    _check(failures,
+           any(a.get("name") == "docker-prune"
+               for a in out_disk.get("needs_approval") or []),
+           "prune vira pergunta (needs_approval) em vez de executar")
+
+    # .governor.json malicioso NÃO muda update_cmd de charter confirmado
+    with open(os.path.join(project_dir, ".governor.json"), "w") as fh:
+        json.dump({"update_cmd": "echo hacked",
+                   "rules": {"auto_update": True}}, fh)
+    catalog2 = discovery.discover(cfg, journal)
+    charter_mod.sync_with_catalog(cfg, journal, catalog2)
+    c2 = charter_mod.load_charter(cfg, "projeto-teste")
+    _check(failures,
+           c2.get("update_cmd") != "echo hacked"
+           and (c2.get("pending_declared") or {}).get("update_cmd") == "echo hacked"
+           and not (c2.get("rules") or {}).get("auto_update"),
+           "update_cmd/rules do .governor.json em charter CONFIRMADO só entram "
+           "como pendência (anti-escalada)")
+    charter_mod.apply_pending_declared(cfg, journal, "projeto-teste")
+    c3 = charter_mod.load_charter(cfg, "projeto-teste")
+    _check(failures, c3.get("update_cmd") == "echo hacked"
+           and (c3.get("rules") or {}).get("auto_update") is True,
+           "aprovação pelo botão aplica a pendência do .governor.json")
+
+    # recusa não re-pergunta enquanto o .governor.json não mudar (anti-loop)
+    with open(os.path.join(project_dir, ".governor.json"), "w") as fh:
+        json.dump({"update_cmd": "echo hacked2"}, fh)
+    catalog3 = discovery.discover(cfg, journal)
+    charter_mod.sync_with_catalog(cfg, journal, catalog3)
+    charter_mod.discard_pending_declared(cfg, journal, "projeto-teste")
+    charter_mod.sync_with_catalog(cfg, journal, catalog3)
+    c4 = charter_mod.load_charter(cfg, "projeto-teste")
+    _check(failures, not c4.get("pending_declared")
+           and c4.get("update_cmd") == "echo hacked",
+           "pendência recusada não volta a perguntar (anti-loop)")
+
+    # conversa: sem api_key cai no fallback determinístico com o contexto
+    from . import chat as chat_mod
+    resp = chat_mod.answer(cfg, journal, "quem é você?", "CTX-DO-VPS")
+    _check(failures, "Governante" in resp and "CTX-DO-VPS" in resp,
+           "chat sem api_key responde com identidade + status")
+
+    # daemon: aprovação de sistema ponta a ponta (pergunta -> botão -> executa)
+    daemon.orion._call = lambda *a, **k: {"ok": True}
+    daemon._request_sys_approval(disk_fail, dict(prune[0], cmd=["true"]), None)
+    approvals = daemon._approvals()
+    _check(failures, len(approvals) == 1, "aprovação de sistema registrada")
+    aid = list(approvals)[0]
+    reply = daemon._handle_sys_approval(aid, True)
+    _check(failures, "✅" in reply and not daemon._approvals(),
+           "botão Autorizar executa a ação aprovada e fecha a pendência")
+    reply2 = daemon._handle_sys_approval(aid, True)
+    _check(failures, "não existe" in reply2,
+           "aprovação respondida não executa duas vezes")
+
+    # roteamento de botão do daemon + conversa via chat_handler
+    resp_btn = daemon.on_callback("gov:decl:projeto-inexistente:ok", "1")
+    _check(failures, "Nada pendente" in resp_btn,
+           "botão de .governor.json responde educado para pendência inexistente")
+    resp_chat = daemon.on_chat("como estão as coisas?", "1")
+    _check(failures, isinstance(resp_chat, str) and len(resp_chat) > 20,
+           "conversa livre devolve resposta (fallback sem api_key)")

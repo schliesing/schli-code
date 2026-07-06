@@ -53,15 +53,27 @@ def incident_chronic(orion, project, check, count, pattern):
 
 
 def new_project(orion, charter):
+    pid = charter["id"]
     orion.send(
         "🆕 Projeto novo descoberto!\n%s\n\n"
         "Está em MODO OBSERVAÇÃO (não vou mexer nele) até você confirmar a "
-        "carta de missão:\n"
-        "  • /confirmar %s — regras passam a valer (monitoro E corrijo)\n"
-        "  • /ignorar %s — deixo de acompanhar\n"
-        "  • ou edite %s.json em charters/ e confirme depois."
-        % (charter_mod.summarize(charter), charter["id"], charter["id"],
-           charter["id"]))
+        "carta de missão." % charter_mod.summarize(charter),
+        buttons=[[("✅ Confirmar", "gov:confirm:%s" % pid),
+                  ("🚫 Ignorar", "gov:ignore:%s" % pid)]])
+
+
+def new_projects_batch(orion, drafts):
+    """Muitos projetos de uma vez (ex.: primeiro scan do servidor): UMA
+    mensagem agrupada em vez de dezenas — e botões só na lista compacta."""
+    lines = ["🆕 Descobri %d projeto(s) novos — todos em MODO OBSERVAÇÃO "
+             "até você confirmar:" % len(drafts)]
+    for c in drafts[:30]:
+        lines.append("  • %s — %s" % (c["id"], (c.get("mission") or "?")[:70]))
+    if len(drafts) > 30:
+        lines.append("  … e mais %d (veja /projetos)." % (len(drafts) - 30))
+    lines.append("\nConfirme um a um com os botões abaixo de cada /missao <id>, "
+                 "ou em lote: /confirmar <id> pra cada um que for produção.")
+    orion.send("\n".join(lines), silent=True)
 
 
 def project_removed(orion, project_id):

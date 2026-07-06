@@ -16,11 +16,22 @@ from .util import atomic_write_json, ensure_dir, read_json
 
 DEFAULTS = {
     "telegram": {
-        # Bot Orion — canal de informações dos projetos.
+        # Bot PRÓPRIO do Governor (crie no BotFather — ex.: @governante0001_bot).
+        # ⚠️ NUNCA reutilize o token de um bot que já faz getUpdates em outro
+        # processo (ex.: o Orion): o Telegram derruba os dois com 409 Conflict.
         "token": "",
         "chat_id": "",
         # Somente estes chats podem enviar comandos; vazio = apenas chat_id.
         "allowed_chat_ids": [],
+    },
+    "chat": {
+        # Conversa em linguagem natural (mensagens sem "/") — LLM externo.
+        # Sem api_key: modo determinístico (status + comandos), nada quebra.
+        "enabled": True,
+        "api_key": "",
+        "model": "MiniMax-M3",
+        "base_url": "https://api.minimax.io/v1/text/chatcompletion_v2",
+        "max_context_chars": 9000,
     },
     "scan_roots": ["/opt", "/srv", "/var/www", "/home", "/root"],
     "exclude_dirs": [
@@ -152,7 +163,9 @@ def load():
 
 def write_example(path):
     example = copy.deepcopy(DEFAULTS)
-    example["telegram"]["token"] = "COLOQUE_O_TOKEN_DO_BOT_ORION"
+    example["telegram"]["token"] = \
+        "TOKEN_DE_UM_BOT_NOVO_SO_DO_GOVERNOR (BotFather; NUNCA o do Orion)"
     example["telegram"]["chat_id"] = "COLOQUE_O_CHAT_ID"
+    example["chat"]["api_key"] = "OPCIONAL_MINIMAX_API_KEY_para_conversa_livre"
     atomic_write_json(path, example)
     return path

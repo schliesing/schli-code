@@ -22,12 +22,14 @@ Desenho 24/7 ("nunca ficar travado"):
 """
 
 import datetime
+import hashlib
 import signal
 import sys
 import threading
 import time
 
 from . import charter as charter_mod
+from . import chat as chat_mod
 from . import discovery, hygiene, monitor, reporting, updates
 from .config import load as load_config
 from .healing import Healer
@@ -234,6 +236,10 @@ class Daemon:
 
         outcome = self.healer.heal(charter, result,
                                    lambda: self._recheck(result, charter))
+        # ações sensíveis (ex.: docker prune) não executam sozinhas — viram
+        # pergunta com botões ✅/❌ pro operador (decisão do Rafa, 2026-07-06)
+        for action in outcome.get("needs_approval") or []:
+            self._request_sys_approval(result, action, charter)
         self.journal.update_incident(
             result.project, result.check,
             attempts=incident.get("attempts", 0) + outcome["attempts"],
@@ -274,8 +280,14 @@ class Daemon:
         discovery.save_catalog(self.cfg, new)
         added, removed, changed = discovery.diff_catalog(old, new)
         drafts = charter_mod.sync_with_catalog(self.cfg, self.journal, new)
-        for draft in drafts:
-            reporting.new_project(self.orion, draft)
+        # 1º scan do servidor acha DEZENAS de projetos — mensagem agrupada;
+        # no dia-a-dia (1-3 novos), mensagem individual com botões ✅/🚫.
+        if len(drafts) > 3:
+            reporting.new_projects_batch(self.orion, drafts)
+        else:
+            for draft in drafts:
+                reporting.new_project(self.orion, draft)
+        self._notify_pending_declared()
         for pid in removed:
             c = charter_mod.load_charter(self.cfg, pid)
             if c and c.get("status") != charter_mod.STATUS_IGNORED:
@@ -315,7 +327,19 @@ class Daemon:
         self.journal.prune()
         pending = hygiene.pending_summary(self.cfg)
         if pending:
-            self.orion.send(pending, silent=True)
+            self.orion.send(pending, silent=True,
+                            buttons=self._hygiene_buttons())
+
+    def _hygiene_buttons(self, limit=3):
+        """Botões ✅/❌ pras maiores propostas pendentes (o resto via /aprovar)."""
+        props = [p for p in hygiene.load_proposals(self.cfg).values()
+                 if p.get("status") == "pending"]
+        props.sort(key=lambda p: -p.get("size", 0))
+        rows = []
+        for p in props[:limit]:
+            rows.append([("✅ %s" % p["id"], "gov:approve:%s" % p["id"]),
+                         ("❌ %s" % p["id"], "gov:reject:%s" % p["id"])])
+        return rows or None
 
     def task_updates(self):
         charters = charter_mod.all_charters(self.cfg)
@@ -407,9 +431,99 @@ class Daemon:
                     self.weekly_cache.get("updates", []))
             atomic_write_json(self.cfg.state_file("digests.json"), state)
 
+    # --- aprovações com botões (ações sensíveis + .governor.json) ----------------------
+    APPROVAL_TTL_S = 6 * 3600   # pendência de aprovação expira em 6h
+
+    def _approvals(self):
+        return read_json(self.cfg.state_file("approvals.json"), default={})
+
+    def _save_approvals(self, data):
+        atomic_write_json(self.cfg.state_file("approvals.json"), data)
+
+    def _request_sys_approval(self, result, action, charter):
+        """Pergunta (com botões) se pode executar uma ação sensível de healing.
+        Dedup: a mesma ação pro mesmo incidente só pergunta 1x até expirar."""
+        aid = hashlib.sha1(("%s|%s" % (result.key(), action["name"]))
+                           .encode()).hexdigest()[:10]
+        approvals = self._approvals()
+        now = time.time()
+        # limpa expiradas
+        approvals = {k: v for k, v in approvals.items()
+                     if now - v.get("created", 0) < self.APPROVAL_TTL_S}
+        if aid in approvals:
+            self._save_approvals(approvals)
+            return  # já perguntei; aguardando o botão
+        context = self.healer._context(charter, result)
+        approvals[aid] = {
+            "action": {k: v for k, v in action.items() if k != "charter"},
+            "context": {k: v for k, v in context.items()
+                        if isinstance(v, (str, int, float))},
+            "check": result.check, "project": result.project,
+            "detail": result.detail, "created": now,
+        }
+        self._save_approvals(approvals)
+        cmd_txt = " ".join(action.get("cmd") or []) or action["name"]
+        self.orion.send(
+            "🛑 Preciso da sua autorização.\n"
+            "Incidente: [%s] %s\n"
+            "Ação proposta: %s\n(`%s`)\n\n"
+            "⚠️ Essa ação remove dados de forma irreversível (ex.: containers "
+            "parados e imagens sem uso). Autorizo?"
+            % (result.project, result.detail, action["name"], cmd_txt),
+            buttons=[[("✅ Autorizar", "gov:sys:%s:ok" % aid),
+                      ("❌ Negar", "gov:sys:%s:no" % aid)]])
+
+    def _handle_sys_approval(self, aid, ok):
+        approvals = self._approvals()
+        item = approvals.pop(aid, None)
+        self._save_approvals(approvals)
+        if not item:
+            return ("Essa autorização não existe mais (expirou ou já foi "
+                    "respondida).")
+        if not ok:
+            self.journal.log("heal", "operador NEGOU ação sensível %s"
+                             % item["action"].get("name"),
+                             project=item.get("project"))
+            return "❌ Negado. Não executo '%s' — sigo só observando." \
+                % item["action"].get("name")
+        exec_ok, log_lines = self.healer.run_approved(item["action"],
+                                                      dict(item.get("context") or {}))
+        self.journal.log("heal", "operador AUTORIZOU ação sensível %s (ok=%s)"
+                         % (item["action"].get("name"), exec_ok),
+                         project=item.get("project"))
+        status = "✅ Executado com sucesso" if exec_ok else \
+            "⚠️ Executei mas o comando retornou erro"
+        return "%s: %s\n%s" % (status, item["action"].get("name"),
+                               "\n".join("  " + l for l in log_lines[-4:]))
+
+    def _notify_pending_declared(self):
+        """Charters confirmados com mudanças sensíveis vindas do .governor.json
+        aguardando decisão — pergunta com botões (1x por versão da mudança)."""
+        state = self.monitor_state.setdefault("declared_notified", {})
+        for pid, c in charter_mod.all_charters(self.cfg).items():
+            pend = c.get("pending_declared")
+            if not pend:
+                state.pop(pid, None)
+                continue
+            stamp = hashlib.sha1(repr(sorted(pend.items()))
+                                 .encode()).hexdigest()[:10]
+            if state.get(pid) == stamp:
+                continue
+            state[pid] = stamp
+            campos = "\n".join("  • %s → %s" % (k, str(v)[:120])
+                               for k, v in sorted(pend.items()))
+            self.orion.send(
+                "🛑 [%s] O .governor.json do projeto pede mudanças SENSÍVEIS "
+                "(rodam como root / mudam minha autonomia):\n%s\n\n"
+                "Aplico ao charter confirmado?" % (pid, campos),
+                buttons=[[("✅ Aplicar", "gov:decl:%s:ok" % pid),
+                          ("❌ Recusar", "gov:decl:%s:no" % pid)]])
+
     # --- comandos Telegram -------------------------------------------------------------
     def _register_commands(self):
         o = self.orion
+        o.register_callback("gov", self.on_callback)
+        o.chat_handler = self.on_chat
         aliases = {
             "status": self.cmd_status, "saude": self.cmd_status,
             "projetos": self.cmd_projects, "projects": self.cmd_projects,
@@ -515,7 +629,13 @@ class Daemon:
         return "▶️ Retomado: healing ativo novamente."
 
     def cmd_help(self, args, chat):
-        return ("🏛 Comandos do Governor:\n"
+        return ("🏛 Sou o GOVERNANTE — descubro, vigio e corrijo os projetos "
+                "deste VPS, e te pergunto (com botões) antes de qualquer ação "
+                "sensível.\n\n"
+                "💬 Fala comigo em texto normal (sem /) que eu respondo sobre "
+                "o servidor: \"como estão os projetos?\", \"o que você fez "
+                "hoje?\", \"por que o disco alertou?\".\n\n"
+                "Comandos:\n"
                 "/status — visão geral e incidentes abertos\n"
                 "/projetos — cartas de missão de todos os projetos\n"
                 "/missao <id> — missão e anotações de um projeto\n"
@@ -525,6 +645,65 @@ class Daemon:
                 "/aprovar <id> | /rejeitar <id> | /restaurar <id>\n"
                 "/relatorio — resumo diário sob demanda\n"
                 "/pausar | /retomar — suspende/reativa correções")
+
+    # --- botões inline -----------------------------------------------------------------
+    def on_callback(self, data, chat):
+        """Roteia cliques de botão: 'gov:<verbo>:<args...>'."""
+        parts = data.split(":")
+        verb = parts[1] if len(parts) > 1 else ""
+        if verb == "confirm" and len(parts) > 2:
+            return self.cmd_confirm([parts[2]], chat)
+        if verb == "ignore" and len(parts) > 2:
+            return self.cmd_ignore([parts[2]], chat)
+        if verb == "approve" and len(parts) > 2:
+            return self.cmd_approve([parts[2]], chat)
+        if verb == "reject" and len(parts) > 2:
+            return self.cmd_reject([parts[2]], chat)
+        if verb == "sys" and len(parts) > 3:
+            return self._handle_sys_approval(parts[2], parts[3] == "ok")
+        if verb == "decl" and len(parts) > 3:
+            pid, ok = parts[2], parts[3] == "ok"
+            if ok:
+                c = charter_mod.apply_pending_declared(self.cfg, self.journal, pid)
+                return ("✅ Mudanças do .governor.json aplicadas ao charter "
+                        "de '%s'." % pid) if c else \
+                    "Nada pendente em '%s' (expirou ou já foi decidido)." % pid
+            c = charter_mod.discard_pending_declared(self.cfg, self.journal, pid)
+            return ("❌ Mudanças recusadas — o charter de '%s' segue como "
+                    "estava." % pid) if c else \
+                "Nada pendente em '%s' (expirou ou já foi decidido)." % pid
+        return "Botão desconhecido (%s) — talvez de uma versão antiga." % data[:40]
+
+    # --- conversa em linguagem natural ---------------------------------------------------
+    def _chat_context(self):
+        """Retrato compacto e REAL do VPS agora — o chão da conversa."""
+        catalog = discovery.load_catalog(self.cfg)
+        charters = charter_mod.all_charters(self.cfg)
+        parts = []
+        if self.paused:
+            parts.append("⏸ HEALING PAUSADO pelo operador (/retomar religa).")
+        parts.append(reporting.status_text(self.cfg, self.journal, catalog,
+                                           charters))
+        pend = hygiene.pending_summary(self.cfg, limit=6)
+        if pend:
+            parts.append(pend)
+        approvals = self._approvals()
+        if approvals:
+            parts.append("Autorizações aguardando seu botão: %d"
+                         % len(approvals))
+        acts = self.journal.recent(limit=15, since_epoch=time.time() - 86400)
+        if acts:
+            parts.append("Minhas últimas ações/registros (24h):")
+            for a in acts[-15:]:
+                parts.append("  [%s]%s %s" % (
+                    a.get("kind", "?"),
+                    (" [" + a["project"] + "]") if a.get("project") else "",
+                    (a.get("msg") or "")[:110]))
+        return "\n".join(parts)
+
+    def on_chat(self, text, chat):
+        return chat_mod.answer(self.cfg, self.journal, text,
+                               self._chat_context())
 
 
 def _version():

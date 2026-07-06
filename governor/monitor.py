@@ -451,13 +451,24 @@ def _check_git(pid, charter):
 
 
 def _check_declared_freshness(pid, charter):
-    """Heartbeats e backups declarados: arquivo precisa ser recente."""
+    """Heartbeats e backups declarados: arquivo precisa ser recente.
+
+    heartbeats aceita string (frescor padrão 15min, p/ serviço always-on) OU
+    dict {"path": ..., "max_age_h": N} — assim um cron DIÁRIO (esteira de vídeo,
+    postagem de Instagram) declara a tolerância certa (ex.: 26h) e o Governante
+    alerta se o pipeline parar de rodar, em vez de a falha passar silenciosa."""
     results = []
     declared = []
     for item in charter.get("backup_paths") or []:
         declared.append(("backup", item, 26 * 3600))
     for item in (charter.get("heartbeats") or []):
-        declared.append(("heartbeat", item, 15 * 60))
+        if isinstance(item, dict):
+            path = item.get("path")
+            max_age = int(float(item.get("max_age_h", 0.25)) * 3600)
+            if path:
+                declared.append(("heartbeat", path, max_age))
+        else:
+            declared.append(("heartbeat", item, 15 * 60))
     for kind, path, max_age in declared:
         try:
             age = time.time() - os.stat(path).st_mtime

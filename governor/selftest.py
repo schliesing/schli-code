@@ -319,6 +319,23 @@ def _run_all(tmp, failures):
     _check(failures, "Governante" in resp and "CTX-DO-VPS" in resp,
            "chat sem api_key responde com identidade + status")
 
+    # heartbeat de cron DIÁRIO: dict {path, max_age_h} tolera 26h (não os 15min
+    # do heartbeat always-on) — sem isso o Governante acha que toda esteira parou.
+    hb_fresh = os.path.join(project_dir, "hb-fresh.txt")
+    open(hb_fresh, "w").close()  # recém-criado = fresco
+    hb_charter = dict(confirmed, heartbeats=[{"path": hb_fresh, "max_age_h": 26}],
+                      ports=[], endpoints=[])
+    hb_results = monitor.project_checks(cfg, hb_charter, {})
+    hb = [r for r in hb_results if r.check.startswith("heartbeat:")]
+    _check(failures, bool(hb) and hb[0].ok,
+           "heartbeat de cron diário (max_age_h=26) aceita arquivo fresco")
+    old_mtime = _time.time() - 30 * 3600
+    os.utime(hb_fresh, (old_mtime, old_mtime))
+    hb_results2 = monitor.project_checks(cfg, hb_charter, {})
+    hb2 = [r for r in hb_results2 if r.check.startswith("heartbeat:")]
+    _check(failures, bool(hb2) and not hb2[0].ok,
+           "heartbeat de 30h estourado (>26h) vira alerta")
+
     # daemon: aprovação de sistema ponta a ponta (pergunta -> botão -> executa)
     daemon.orion._call = lambda *a, **k: {"ok": True}
     daemon._request_sys_approval(disk_fail, dict(prune[0], cmd=["true"]), None)

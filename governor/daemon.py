@@ -698,6 +698,14 @@ class Daemon:
             parts.append("⏸ HEALING PAUSADO pelo operador (/retomar religa).")
         parts.append(reporting.status_text(self.cfg, self.journal, catalog,
                                            charters))
+        # Missões dos projetos CONFIRMADOS: dá ao cérebro de conversa o "o que é
+        # cada projeto que eu guardo" (senão ele só sabe o id/status, não o quê).
+        confirmados = [c for c in charters.values()
+                       if c.get("status") == charter_mod.STATUS_CONFIRMED]
+        if confirmados:
+            parts.append("Projetos que eu guardo (confirmados) e o que fazem:")
+            for c in sorted(confirmados, key=lambda c: c["id"])[:20]:
+                parts.append("  • %s: %s" % (c["id"], (c.get("mission") or "?")[:180]))
         pend = hygiene.pending_summary(self.cfg, limit=6)
         if pend:
             parts.append(pend)

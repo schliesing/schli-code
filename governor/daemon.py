@@ -197,11 +197,12 @@ class Daemon:
                 inc = incidents[key]
                 self.journal.close_incident(result.project, result.check,
                                             "normalizado")
-                reporting.incident_healed(
-                    self.orion, result.project, result.check,
-                    inc.get("last_action") or "normalizou sem intervenção",
-                    time.time() - inc.get("opened_epoch", time.time()),
-                    inc.get("attempts", 0))
+                if self._notifica_tempo_real(result, charter):
+                    reporting.incident_healed(
+                        self.orion, result.project, result.check,
+                        inc.get("last_action") or "normalizou sem intervenção",
+                        time.time() - inc.get("opened_epoch", time.time()),
+                        inc.get("attempts", 0))
             return
 
         # falhou: debounce antes de abrir incidente
@@ -216,11 +217,16 @@ class Daemon:
                                               result.detail, result.severity)
         if is_new:
             daily = self.learning.record_incident(key)
-            reporting.incident_opened(self.orion, incident, result.evidence)
-            if self.learning.is_chronic(key):
-                reporting.incident_chronic(self.orion, result.project,
-                                           result.check, daily,
-                                           self.learning.hour_pattern(key))
+            # Tempo real SÓ para projeto CONFIRMADO (ou sistema): o 1º scan
+            # acha dezenas de projetos antigos com serviço parado DE PROPÓSITO
+            # — alertar cada um na hora é rajada de ruído no Telegram. Draft
+            # fica no journal e aparece no digest diário; confirmou, vira alerta.
+            if self._notifica_tempo_real(result, charter):
+                reporting.incident_opened(self.orion, incident, result.evidence)
+                if self.learning.is_chronic(key):
+                    reporting.incident_chronic(self.orion, result.project,
+                                               result.check, daily,
+                                               self.learning.hour_pattern(key))
 
         # healing
         can, reason = self.healer.can_heal(charter, result)
@@ -228,7 +234,8 @@ class Daemon:
             if is_new and result.fixable and not incident.get("escalated"):
                 self.journal.update_incident(result.project, result.check,
                                              escalated=True)
-                if "observação" not in reason and "informativa" not in reason:
+                if "observação" not in reason and "informativa" not in reason \
+                        and self._notifica_tempo_real(result, charter):
                     reporting.incident_escalated(
                         self.orion, result.project, result.check,
                         result.detail, reason, [])
@@ -258,6 +265,13 @@ class Daemon:
             reporting.incident_escalated(self.orion, result.project,
                                          result.check, result.detail,
                                          "ações esgotadas", outcome["log"])
+
+    @staticmethod
+    def _notifica_tempo_real(result, charter):
+        """Alerta na hora só de sistema e de projeto CONFIRMADO — draft é
+        observe-only também no Telegram (journal + digest diário cobrem)."""
+        return result.project == "_system" or \
+            (charter or {}).get("status") == charter_mod.STATUS_CONFIRMED
 
     def _recheck(self, result, charter):
         if result.project == "_system":

@@ -1,0 +1,17 @@
+{
+  "name": "meu-projeto",
+  "mission": "Descreva em uma frase a missão primária deste projeto — o que ele NUNCA pode deixar de fazer.",
+  "services": ["meu-projeto.service"],
+  "endpoints": ["http://127.0.0.1:3000/health"],
+  "domains": ["meuprojeto.com.br"],
+  "log_paths": ["/opt/meu-projeto/logs"],
+  "backup_paths": ["/var/backups/meu-projeto/latest.tar.gz"],
+  "update_cmd": "git pull --ff-only && npm ci --omit=dev",
+  "test_cmd": "npm test",
+  "rules": {
+    "auto_heal": true,
+    "auto_update": false,
+    "proactive_restart": false,
+    "max_restarts_per_hour": 3
+  }
+}

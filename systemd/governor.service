@@ -1,0 +1,32 @@
+[Unit]
+Description=Governor — agente governante do VPS
+Documentation=https://github.com/schliesing/schli-code
+After=network-online.target docker.service
+Wants=network-online.target
+# Guardião 24/7: NUNCA desistir de reiniciar (sem limite de tentativas).
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/python3 -m governor start
+WorkingDirectory=/opt/governor
+Environment=GOVERNOR_HOME=/var/lib/governor
+Environment=GOVERNOR_CONFIG=/etc/governor/config.json
+Environment=PYTHONUNBUFFERED=1
+
+# Self-healing do próprio Governor:
+# - Restart=always: se morrer (crash, exit por memória alta ou tarefa presa),
+#   volta em 5s — para sempre (StartLimitIntervalSec=0 acima)
+# - WatchdogSec: o Governor só alimenta o watchdog enquanto o loop principal
+#   progride; loop travado -> pings param -> systemd mata e reinicia
+Restart=always
+RestartSec=5
+WatchdogSec=180
+
+# Higiene de recursos do próprio agente
+MemoryMax=512M
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

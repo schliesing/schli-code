@@ -83,6 +83,11 @@ def read_jsonl(path, limit=None):
 
 def run_cmd(cmd, timeout=60, cwd=None):
     """Executa comando; devolve (rc, stdout, stderr). Nunca levanta exceção."""
+    # Sem NOTIFY_SOCKET no filho: rodando sob systemd Type=notify, subprocessos
+    # (ex.: systemctl is-active) mandariam sd_notify pro NOSSO socket e o
+    # systemd logaria "Got notification message from PID..." a cada tick.
+    env = dict(os.environ)
+    env.pop("NOTIFY_SOCKET", None)
     try:
         proc = subprocess.run(
             cmd,
@@ -91,6 +96,7 @@ def run_cmd(cmd, timeout=60, cwd=None):
             text=True,
             timeout=timeout,
             cwd=cwd,
+            env=env,
         )
         return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
     except subprocess.TimeoutExpired:

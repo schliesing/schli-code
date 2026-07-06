@@ -95,6 +95,7 @@ def generate_draft(cfg, info):
         "update_cmd": declared.get("update_cmd") or "",
         "test_cmd": declared.get("test_cmd") or "",
         "backup_paths": declared.get("backup_paths") or [],
+        "heartbeats": declared.get("heartbeats") or [],  # frescor de cron/pipeline
         "rules": rules,
         "created_at": now_iso(),
         "updated_at": now_iso(),
@@ -210,7 +211,7 @@ def sync_with_catalog(cfg, journal, catalog):
             changed = False
             confirmado = charter.get("status") == STATUS_CONFIRMED
             campos_livres = ["mission", "endpoints", "log_paths", "domains",
-                             "backup_paths"]
+                             "backup_paths", "heartbeats"]
             campos_sensiveis = ["update_cmd", "test_cmd"]
             if not confirmado:
                 campos_livres = campos_livres + campos_sensiveis

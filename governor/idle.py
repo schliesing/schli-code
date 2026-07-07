@@ -45,7 +45,8 @@ def _browser_guard(cfg, state, journal):
             rec["last_seen_down"] = now
             continue
         active = _active_pages(pages)
-        connected = _port_has_established_connection(port)
+        connected = _port_has_active_client(
+            port, bcfg.get("ignore_client_patterns") or [])
         if connected or _profile_locked(bcfg.get("lock_dir"), name):
             rec["last_active"] = now
             rec.pop("notified_idle", None)
@@ -60,7 +61,7 @@ def _browser_guard(cfg, state, journal):
         rec["last_action"] = now
         service = (bcfg.get("service_template") or
                    "browser-harness-chrome@%s.service") % name
-        observe_only = _observe_only(cfg)
+        observe_only = _observe_only(cfg) or not bcfg.get("allow_stop", False)
         detail = "Chrome %s sem sessao CDP/lock ha %ds" % (
             name, now - last_active)
         if active:
@@ -199,6 +200,54 @@ def _port_has_established_connection(port):
     if rc != 0:
         return False
     return any(":%d" % port in line for line in out.splitlines()[1:])
+
+
+def _port_has_active_client(port, ignore_patterns):
+    rc, out, _ = run_cmd(["ss", "-tnp", "state", "established"], timeout=10)
+    if rc != 0:
+        return False
+    marker = ":%d" % port
+    for line in out.splitlines()[1:]:
+        if marker not in line:
+            continue
+        for pid in _pids_from_ss_line(line):
+            cmd = _cmdline(pid)
+            if not cmd:
+                continue
+            if any(pattern and pattern in cmd for pattern in ignore_patterns):
+                continue
+            return True
+    return False
+
+
+def _pids_from_ss_line(line):
+    pids = []
+    marker = "pid="
+    idx = 0
+    while True:
+        idx = line.find(marker, idx)
+        if idx < 0:
+            break
+        idx += len(marker)
+        end = idx
+        while end < len(line) and line[end].isdigit():
+            end += 1
+        if end > idx:
+            try:
+                pids.append(int(line[idx:end]))
+            except ValueError:
+                pass
+        idx = end
+    return pids
+
+
+def _cmdline(pid):
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as fh:
+            return fh.read().replace(b"\0", b" ").decode(
+                "utf-8", errors="replace")
+    except OSError:
+        return ""
 
 
 def _stop_systemd(service):

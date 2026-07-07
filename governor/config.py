@@ -83,6 +83,11 @@ DEFAULTS = {
             "service_template": "browser-harness-chrome@%s.service",
             "idle_s": 300,
             "cooldown_s": 1800,
+            "allow_stop": False,
+            "ignore_client_patterns": [
+                "google-chrome-stable",
+                "browser_harness.daemon",
+            ],
         },
         "tts": {
             "enabled": True,

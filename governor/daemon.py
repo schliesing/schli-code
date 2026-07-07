@@ -30,7 +30,7 @@ import time
 
 from . import charter as charter_mod
 from . import chat as chat_mod
-from . import discovery, hygiene, monitor, reporting, updates
+from . import discovery, hygiene, idle, monitor, reporting, updates
 from .config import load as load_config
 from .healing import Healer
 from .journal import Journal
@@ -93,6 +93,8 @@ class Daemon:
                           self.task_learning)
             self._run_due("selfcare", self.cfg.interval("selfcare"),
                           self.task_selfcare)
+            self._run_due("idle_guard", self.cfg.interval("idle_guard"),
+                          self.task_idle_guard)
             self._run_due("flush_queue", self.cfg.interval("flush_queue"),
                           self.orion.flush_queue)
             self._run_due("forecast", 3600, self.task_forecast)
@@ -414,6 +416,13 @@ class Daemon:
                                 "mim mesmo por segurança."
                                 % (name, age / 3600,
                                    self.BG_RESTART_AFTER // 3600), silent=True)
+
+    def task_idle_guard(self):
+        messages = idle.run(self.cfg, self.journal)
+        if not self.cfg.get("idle_guard", "notify", default=True):
+            return
+        for message in messages[:5]:
+            self.orion.send(message, silent=True)
 
     def task_forecast(self):
         result = monitor.disk_forecast(self.cfg)

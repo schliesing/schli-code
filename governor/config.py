@@ -48,6 +48,7 @@ DEFAULTS = {
         "selfcare": 60,        # auto-cuidado do Governor (s)
         "updates": 43200,      # checagem de updates dos projetos (s)
         "flush_queue": 120,    # reenvio de mensagens Telegram represadas (s)
+        "idle_guard": 60,      # observação de recursos pesados parados (s)
     },
     "digest_hour": 8,          # hora local do resumo diário
     "weekly_digest_day": 0,    # 0 = segunda-feira (relatório semanal)
@@ -70,6 +71,28 @@ DEFAULTS = {
     "dry_run": False,          # true = registra o que faria, não executa ações
     "healing_enabled": True,
     "http_timeout": 6,
+    "systemd_activating_grace_s": 900,
+    "idle_guard": {
+        "enabled": True,
+        "observe_only": True,
+        "notify": True,
+        "browser": {
+            "enabled": True,
+            "profiles_dir": "/root/browser-harness/profiles",
+            "lock_dir": "/run/browser-harness",
+            "service_template": "browser-harness-chrome@%s.service",
+            "idle_s": 300,
+            "cooldown_s": 1800,
+        },
+        "tts": {
+            "enabled": True,
+            "pm2_name": "tts-local",
+            "port": 8791,
+            "idle_s": 300,
+            "cooldown_s": 1800,
+            "allow_stop": False,
+        },
+    },
     # Se o loop principal ficar sem progredir por este tempo (s), o Governor
     # para de alimentar o watchdog do systemd, que o mata e reinicia.
     "watchdog_stall_limit": 600,

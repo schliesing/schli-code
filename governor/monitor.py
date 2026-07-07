@@ -199,7 +199,7 @@ def project_checks(cfg, charter, state):
         return [r for r in results if r]
 
     for unit in charter.get("services") or []:
-        results.append(_check_systemd(pid, unit))
+        results.append(_check_systemd(cfg, pid, unit))
     for name in charter.get("containers") or []:
         results.append(_check_container(pid, name))
     for name in charter.get("pm2") or []:
@@ -222,13 +222,47 @@ def project_checks(cfg, charter, state):
     return [r for r in results if r]
 
 
-def _check_systemd(pid, unit):
+def _check_systemd(cfg, pid, unit):
     if not which("systemctl"):
         return None
-    rc, out, _ = run_cmd(["systemctl", "is-active", unit], timeout=10)
-    ok = out.strip() == "active"
-    detail = "unit %s está '%s'" % (unit, out.strip() or "desconhecida")
+    rc, out, _ = run_cmd(["systemctl", "show", unit, "--no-pager",
+                          "-p", "ActiveState",
+                          "-p", "SubState",
+                          "-p", "StateChangeTimestampMonotonic"],
+                         timeout=10)
+    if rc != 0:
+        rc, out, _ = run_cmd(["systemctl", "is-active", unit], timeout=10)
+        state = out.strip() or "desconhecida"
+        return CheckResult(pid, "systemd:%s" % unit, state == "active",
+                           "unit %s está '%s'" % (unit, state),
+                           severity=SEV_CRIT)
+    props = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+    state = props.get("ActiveState") or "desconhecida"
+    sub = props.get("SubState") or ""
+    ok = state == "active"
+    if state == "activating":
+        grace = cfg.get("systemd_activating_grace_s", default=900) \
+            if cfg is not None else 900
+        age = _systemd_state_age_s(props.get("StateChangeTimestampMonotonic"))
+        if age is not None and age < grace:
+            return CheckResult(
+                pid, "systemd:%s" % unit, True,
+                "unit %s ainda ativando há %s (janela %s)" %
+                (unit, _fmt_age(age), _fmt_age(grace)), severity=SEV_INFO)
+    detail = "unit %s está '%s%s'" % (unit, state, ("/" + sub) if sub else "")
     return CheckResult(pid, "systemd:%s" % unit, ok, detail, severity=SEV_CRIT)
+
+
+def _systemd_state_age_s(monotonic_usec):
+    try:
+        changed = int(monotonic_usec or 0) / 1000000.0
+        if changed <= 0:
+            return None
+        with open("/proc/uptime") as fh:
+            uptime = float(fh.read().split()[0])
+        return max(0, uptime - changed)
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 def _check_container(pid, name):

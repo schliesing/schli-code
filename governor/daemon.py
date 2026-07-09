@@ -271,9 +271,21 @@ class Daemon:
     @staticmethod
     def _notifica_tempo_real(result, charter):
         """Alerta na hora só de sistema e de projeto CONFIRMADO — draft é
-        observe-only também no Telegram (journal + digest diário cobrem)."""
-        return result.project == "_system" or \
-            (charter or {}).get("status") == charter_mod.STATUS_CONFIRMED
+        observe-only também no Telegram (journal + digest diário cobrem).
+
+        CORTE DE RUÍDO (Rafa 2026-07-09: "fica me mandando notificação e não
+        conserta nada"): observação NÃO-ACIONÁVEL e NÃO-crítica (fixable=False +
+        severity != critical — ex.: cert em 14d, erro de log, load alto, git
+        drift, heartbeat velho) NÃO pinga em tempo real; vai só pro journal +
+        DIGEST DIÁRIO. Em tempo real só o que é ACIONÁVEL (fixable, tem conserto)
+        ou CRÍTICO. Escalonamento de conserto que falhou continua alertando à
+        parte (não passa por aqui)."""
+        if result.project != "_system" and \
+                (charter or {}).get("status") != charter_mod.STATUS_CONFIRMED:
+            return False
+        if not result.fixable and result.severity != monitor.SEV_CRIT:
+            return False
+        return True
 
     def _recheck(self, result, charter):
         if result.project == "_system":

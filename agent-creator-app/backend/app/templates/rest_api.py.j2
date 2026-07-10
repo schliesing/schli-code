@@ -1,0 +1,158 @@
+"""
+{{ persona.name if persona else "Agente IA" }} - API REST
+Gerado automaticamente pelo Agent Creator App
+"""
+
+import logging
+from contextlib import asynccontextmanager
+from typing import Any
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+from agent_definition import create_agent
+
+load_dotenv()
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Instância global do agente
+_agent = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _agent
+    logger.info("Inicializando agente...")
+    _agent = create_agent()
+    logger.info("Agente pronto!")
+    yield
+    logger.info("Encerrando agente...")
+
+
+app = FastAPI(
+    title="{{ persona.name if persona else 'Agente IA' }} API",
+    description="{{ persona.system_prompt if persona else 'API do seu agente de IA.' }}",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+# CORS para integração com frontends
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: str | None = None
+
+
+class ChatResponse(BaseModel):
+    response: str
+    agent_name: str = "{{ persona.name if persona else 'Agente IA' }}"
+
+
+@app.get("/")
+async def root():
+    return {
+        "agent": "{{ persona.name if persona else 'Agente IA' }}",
+        "status": "online",
+        "emoji": "{{ persona.avatar_emoji if persona else '🤖' }}",
+        "greeting": "{{ persona.greeting if persona else 'Olá!' }}",
+    }
+
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "agent": "{{ persona.name if persona else 'Agente IA' }}"}
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """
+    Envia uma mensagem para o agente e recebe a resposta.
+
+    - **message**: A mensagem do usuário
+    - **session_id**: (Opcional) ID da sessão para contexto
+    """
+    if not request.message.strip():
+        raise HTTPException(status_code=400, detail="A mensagem não pode ser vazia.")
+
+    try:
+        result = _agent.invoke({"input": request.message})
+        response_text = result.get("output", str(result))
+        return ChatResponse(response=response_text)
+    except Exception as e:
+        logger.error(f"Erro ao processar mensagem: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao processar sua mensagem. Verifique as configurações do agente.",
+        )
+
+
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """
+    Envia uma mensagem e recebe a resposta em streaming (token por token).
+    Retorna Server-Sent Events (SSE).
+    """
+    if not request.message.strip():
+        raise HTTPException(status_code=400, detail="A mensagem não pode ser vazia.")
+
+    async def generate():
+        try:
+            async for event in _agent.astream_events(
+                {"input": request.message},
+                version="v1",
+            ):
+                kind = event.get("event", "")
+                if kind == "on_chat_model_stream":
+                    chunk = event.get("data", {}).get("chunk")
+                    if chunk and hasattr(chunk, "content") and chunk.content:
+                        yield f"data: {chunk.content}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            yield f"data: [ERROR] {str(e)}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+{% if deployment and "web_widget" in deployment.targets %}
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+import os
+
+# Serve o widget de chat se existir
+if os.path.exists("web_widget"):
+    app.mount("/widget", StaticFiles(directory="web_widget", html=True), name="widget")
+
+
+@app.get("/widget", response_class=HTMLResponse)
+async def widget():
+    """Redireciona para o widget de chat."""
+    return HTMLResponse(
+        '<meta http-equiv="refresh" content="0; url=/widget/index.html">',
+        status_code=200,
+    )
+{% endif %}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)

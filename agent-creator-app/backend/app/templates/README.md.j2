@@ -1,0 +1,209 @@
+# {{ persona.name if persona else "Agente IA" }} {{ persona.avatar_emoji if persona else "🤖" }}
+
+{% if persona and persona.greeting %}
+> "{{ persona.greeting }}"
+{% endif %}
+
+Gerado pelo **Agent Creator App** — seu agente de IA pronto para usar!
+
+---
+
+## Como colocar seu agente para funcionar
+
+Siga os passos abaixo com calma. Não precisa ser técnico!
+
+---
+
+### Passo 1 — Instale o Docker Desktop
+
+O Docker é um programa que vai rodar seu agente de forma simples, sem precisar configurar nada manualmente.
+
+1. Acesse **[docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop)**
+2. Baixe a versão para o seu sistema operacional (Windows, Mac ou Linux)
+3. Instale normalmente, como qualquer outro programa
+4. Abra o Docker Desktop e aguarde iniciar (aparece um ícone de baleia na barra de tarefas)
+
+---
+
+### Passo 2 — Configure suas chaves de API
+
+1. Procure pelo arquivo **`.env.example`** nesta pasta
+2. Faça uma cópia deste arquivo e renomeie para **`.env`** (sem o `.example`)
+   - Windows: clique com botão direito > Copiar > colar > renomear
+   - Mac/Linux: `cp .env.example .env`
+3. Abra o arquivo **`.env`** com qualquer editor de texto (Bloco de Notas, TextEdit, etc.)
+
+---
+
+### Passo 3 — Preencha suas chaves no arquivo .env
+
+Dentro do arquivo `.env`, você verá linhas como:
+
+```
+{% if model and model.provider == "openai" %}
+OPENAI_API_KEY=sk-sua-chave-aqui
+{% elif model and model.provider == "anthropic" %}
+ANTHROPIC_API_KEY=sk-ant-sua-chave-aqui
+{% elif model and model.provider == "gemini" %}
+GOOGLE_API_KEY=sua-chave-aqui
+{% elif model and model.provider == "ollama" %}
+OLLAMA_BASE_URL=http://localhost:11434
+{% elif model and model.provider == "lmstudio" %}
+LMSTUDIO_BASE_URL=http://localhost:1234/v1
+{% else %}
+# Configure as chaves conforme necessário
+{% endif %}
+{% if deployment and "telegram" in deployment.targets %}
+TELEGRAM_BOT_TOKEN=seu-token-aqui
+{% endif %}
+{% if deployment and "discord" in deployment.targets %}
+DISCORD_BOT_TOKEN=seu-token-aqui
+{% endif %}
+```
+
+Substitua os valores `sua-chave-aqui` pelas chaves reais. O arquivo `.env.example` tem instruções de onde obter cada chave.
+
+{% if model and model.provider in ("openai", "anthropic", "gemini") %}
+
+**Como obter sua chave de API:**
+
+{% if model and model.provider == "openai" %}
+1. Acesse [platform.openai.com](https://platform.openai.com)
+2. Crie uma conta (ou faça login)
+3. Clique em **API Keys** no menu lateral
+4. Clique em **Create new secret key**
+5. Copie a chave e cole no arquivo `.env`
+{% elif model and model.provider == "anthropic" %}
+1. Acesse [console.anthropic.com](https://console.anthropic.com)
+2. Crie uma conta (ou faça login)
+3. Vá em **API Keys** no menu
+4. Clique em **Create Key**
+5. Copie a chave e cole no arquivo `.env`
+{% elif model and model.provider == "gemini" %}
+1. Acesse [aistudio.google.com](https://aistudio.google.com/app/apikey)
+2. Faça login com sua conta Google
+3. Clique em **Create API Key**
+4. Copie a chave e cole no arquivo `.env`
+5. **Bônus:** O Gemini Flash tem plano gratuito generoso!
+{% endif %}
+
+{% elif model and model.provider == "ollama" %}
+
+**Como instalar o Ollama (modelo local):**
+
+1. Acesse [ollama.com/download](https://ollama.com/download)
+2. Baixe e instale o Ollama
+3. Abra o terminal e execute:
+   ```
+   ollama pull {{ model.model_id }}
+   ```
+4. Aguarde o download do modelo (pode demorar alguns minutos)
+5. O Ollama iniciará automaticamente na inicialização
+
+{% elif model and model.provider == "lmstudio" %}
+
+**Como configurar o LM Studio:**
+
+1. Acesse [lmstudio.ai](https://lmstudio.ai/)
+2. Baixe e instale o LM Studio
+3. Abra o LM Studio e baixe um modelo na aba **Discover**
+4. Vá em **Server** > **Start Server**
+5. Anote o endereço (padrão: http://localhost:1234/v1) e confirme no `.env`
+
+{% endif %}
+
+{% if deployment and "telegram" in deployment.targets %}
+
+**Como criar seu Bot do Telegram:**
+
+1. Abra o Telegram e procure pelo usuário **@BotFather**
+2. Inicie uma conversa e envie: `/newbot`
+3. Siga as instruções: escolha um nome e depois um username (deve terminar em "bot")
+4. O BotFather enviará um **token** — copie e cole no `.env` como `TELEGRAM_BOT_TOKEN`
+
+{% endif %}
+
+{% if deployment and "discord" in deployment.targets %}
+
+**Como criar seu Bot do Discord:**
+
+1. Acesse [discord.com/developers/applications](https://discord.com/developers/applications)
+2. Clique em **New Application** e dê um nome
+3. Vá em **Bot** no menu lateral
+4. Clique em **Reset Token** e copie o token
+5. Cole no `.env` como `DISCORD_BOT_TOKEN`
+6. Para adicionar ao servidor: vá em **OAuth2 > URL Generator**, selecione `bot`, escolha as permissões e use o link gerado
+
+{% endif %}
+
+---
+
+### Passo 4 — Inicie o agente
+
+Abra um terminal (Prompt de Comando no Windows, Terminal no Mac/Linux) na pasta deste projeto e execute:
+
+```bash
+docker-compose up
+```
+
+O Docker vai:
+1. Baixar as dependências necessárias (primeira vez pode demorar alguns minutos)
+2. Configurar tudo automaticamente
+3. Iniciar seu agente!
+
+{% if deployment and "telegram" in deployment.targets %}
+
+Quando aparecer `Bot iniciado! Pressione Ctrl+C para parar.` no terminal, abra o Telegram e procure pelo nome do seu bot para começar a conversar!
+
+{% elif deployment and "discord" in deployment.targets %}
+
+Quando aparecer no terminal que o bot está online, ele já estará disponível no seu servidor Discord!
+
+{% elif deployment and ("rest_api" in deployment.targets or "web_widget" in deployment.targets) %}
+
+Quando o servidor iniciar, acesse:
+- **API:** http://localhost:8000
+- **Documentação:** http://localhost:8000/docs
+{% if deployment and "web_widget" in deployment.targets %}
+- **Widget de Chat:** http://localhost:8000/widget
+{% endif %}
+
+{% endif %}
+
+---
+
+### Passo 5 — Pronto! Seu agente está funcionando! 🎉
+
+Para parar o agente, pressione `Ctrl+C` no terminal.
+
+Para reiniciar o agente, execute novamente: `docker-compose up`
+
+---
+
+## Configurações do seu agente
+
+| Configuração | Valor |
+|-------------|-------|
+| **Nome** | {{ persona.name if persona else "Agente IA" }} |
+| **Framework** | {{ framework.display_name if framework else "LangChain" }} |
+{% if characteristics %}
+| **Papel** | {{ characteristics.role_label }} |
+{% endif %}
+{% if model %}
+| **Modelo de IA** | {{ model.model_id }} ({{ model.provider }}) |
+{% endif %}
+{% if memory %}
+| **Memória** | {{ memory.type }} |
+{% endif %}
+{% if deployment and deployment.targets %}
+| **Deploy** | {{ deployment.targets | join(", ") }} |
+{% endif %}
+
+---
+
+## Precisa de ajuda?
+
+- **Documentação do LangChain:** https://python.langchain.com
+- **Docker Desktop:** https://docs.docker.com/desktop/
+
+Gerado por [Agent Creator App](https://github.com/agentcreator)

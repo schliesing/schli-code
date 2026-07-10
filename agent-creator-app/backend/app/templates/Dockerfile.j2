@@ -1,0 +1,44 @@
+FROM python:3.11-slim
+
+# Metadados
+LABEL maintainer="Agent Creator App"
+LABEL description="{{ persona.name if persona else 'Agente IA' }} - Gerado pelo Agent Creator App"
+
+# Variáveis de ambiente
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PIP_NO_CACHE_DIR=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Diretório de trabalho
+WORKDIR /app
+
+# Instala dependências do sistema
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copia e instala dependências Python primeiro (aproveitando cache do Docker)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copia o código do agente
+COPY . .
+
+# Cria diretório para dados persistentes
+RUN mkdir -p /app/data /app/logs
+
+# Expõe a porta (para deploy como API/widget)
+{% if deployment and ("rest_api" in deployment.targets or "web_widget" in deployment.targets) %}
+EXPOSE 8000
+{% else %}
+EXPOSE 8000
+{% endif %}
+
+# Usuário não-root por segurança
+RUN useradd -m -u 1000 agente && chown -R agente:agente /app
+USER agente
+
+# Comando de inicialização
+CMD ["python", "main.py"]
